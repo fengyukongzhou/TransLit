@@ -14,8 +14,8 @@ const DEFAULT_CONFIG: AppConfig = {
   baseUrl: 'https://integrate.api.nvidia.com/v1',
   modelName: 'minimaxai/minimax-m2.1',
   targetLanguage: 'Chinese (Simplified)',
-  systemInstruction: 'You are a professional translator. Translate the following content preserving the markdown format.',
-  proofreadInstruction: 'Proofread the following text for grammar and flow.',
+  systemInstruction: 'You are a professional translator. Translate the following content preserving the markdown format. For bold or italic text, use HTML tags (<b> and <i>) instead of Markdown asterisks (* or **).',
+  proofreadInstruction: 'Proofread the following text for grammar and flow. For bold or italic text, use HTML tags (<b> and <i>) instead of Markdown asterisks (* or **).',
   enableProofreading: true,
   useRecommendedPrompts: true,
   smartSkip: true
@@ -30,6 +30,7 @@ const App: React.FC = () => {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [restoredSession, setRestoredSession] = useState<boolean>(false);
   const [showConfirmReset, setShowConfirmReset] = useState<boolean>(false);
+  const [viewMode, setViewMode] = useState<'logs' | 'chapters'>('logs');
   
   // Refs for services and data persistence
   const epubService = useRef(new EpubService());
@@ -160,6 +161,230 @@ const App: React.FC = () => {
     addLog("Workflow reset.", "info");
   };
 
+  const processChapter = async (
+    index: number, 
+    aiService: AiService, 
+    chapters: Chapter[], 
+    effectiveSystemInstruction: string,
+    effectiveProofreadInstruction: string,
+    forceTranslateIndices: number[] = [],
+    forceProofreadIndices: number[] = []
+  ) => {
+    const chapter = chapters[index];
+    let updated = false;
+    
+    // Skip empty chapters usually
+    if (!chapter.markdown || chapter.markdown.trim().length < 10) {
+       if (!chapter.translatedMarkdown) { 
+           addLog(`Skipping empty/short chapter: ${chapter.title}`, "info");
+       }
+       return false;
+    }
+    
+    // Handle Smart Skip Logic
+    if (config.smartSkip && !forceTranslateIndices.length && !forceProofreadIndices.length) {
+        if (chapter.isSkippable) return false;
+        if (chapter.isReference) {
+            if (!chapter.translatedMarkdown) {
+                addLog(`Keeping reference chapter untranslated: ${chapter.title}`, "info");
+                chapter.translatedMarkdown = chapter.markdown;
+                chapter.proofreadMarkdown = chapter.markdown;
+                updated = true;
+                await persistenceService.current.updateChapter(chapter);
+            }
+            return updated;
+        }
+    }
+
+    // --- Translation ---
+    if (chapter.translatedMarkdown && forceTranslateIndices.length === 0) {
+        // Already translated, move on
+    } else {
+        setStatus(AppStatus.TRANSLATING);
+        addLog(`Translating [${index+1}/${chapters.length}]: ${chapter.title}${forceTranslateIndices.length ? ' (Retrying failed parts)' : ''}`, "process");
+        
+        if (!chapter.translatedChunks) chapter.translatedChunks = [];
+        if (!chapter.fallbackChunks) chapter.fallbackChunks = [];
+        
+        const translated = await aiService.translateContent(
+          chapter.markdown, 
+          config.targetLanguage, 
+          effectiveSystemInstruction,
+          async (current, total, chunkResult, isFallback) => {
+              if (isFallback) {
+                  addLog(`  > ⚠️ API returned empty/error for part ${current}/${total} of "${chapter.title}". Kept original.`, 'error');
+                  if (!chapter.fallbackChunks!.includes(current - 1)) {
+                      chapter.fallbackChunks!.push(current - 1);
+                  }
+              } else {
+                  addLog(`  > Translated part ${current}/${total} of "${chapter.title}"...`, 'info');
+                  if (chapter.fallbackChunks) {
+                    chapter.fallbackChunks = chapter.fallbackChunks.filter(idx => idx !== current - 1);
+                  }
+              }
+              
+              if (chapter.translatedChunks) {
+                  chapter.translatedChunks![current - 1] = chunkResult;
+                  await persistenceService.current.updateChapter(chapter);
+                  await saveSessionState(AppStatus.TRANSLATING);
+              }
+          },
+          chapter.translatedChunks,
+          forceTranslateIndices
+        );
+        chapter.translatedMarkdown = translated;
+        updated = true;
+    }
+
+    // --- Proofreading ---
+    if (config.enableProofreading) {
+      if (chapter.proofreadMarkdown && forceProofreadIndices.length === 0) {
+          // Already proofread, move on
+      } else {
+          setStatus(AppStatus.PROOFREADING);
+          addLog(`Proofreading [${index+1}/${chapters.length}]: ${chapter.title}${forceProofreadIndices.length ? ' (Retrying failed parts)' : ''}`, "process");
+          
+          if (!chapter.proofreadChunks) chapter.proofreadChunks = [];
+          if (!chapter.fallbackProofreadChunks) chapter.fallbackProofreadChunks = [];
+
+          const proofread = await aiService.proofreadContent(
+            chapter.translatedMarkdown!, 
+            effectiveProofreadInstruction,
+            async (current, total, chunkResult, isFallback) => {
+                if (isFallback) {
+                    addLog(`  > ⚠️ API returned empty/error for part ${current}/${total} of "${chapter.title}".`, 'error');
+                    if (!chapter.fallbackProofreadChunks!.includes(current - 1)) {
+                        chapter.fallbackProofreadChunks!.push(current - 1);
+                    }
+                } else {
+                    addLog(`  > Proofread part ${current}/${total} of "${chapter.title}"...`, 'info');
+                    if (chapter.fallbackProofreadChunks) {
+                        chapter.fallbackProofreadChunks = chapter.fallbackProofreadChunks.filter(idx => idx !== current - 1);
+                    }
+                }
+                
+                if (chapter.proofreadChunks) {
+                    chapter.proofreadChunks![current - 1] = chunkResult;
+                    await persistenceService.current.updateChapter(chapter);
+                    await saveSessionState(AppStatus.PROOFREADING);
+                }
+            },
+            chapter.proofreadChunks,
+            forceProofreadIndices
+          );
+          chapter.proofreadMarkdown = proofread;
+          updated = true;
+      }
+    }
+
+    if (updated) {
+        await persistenceService.current.updateChapter(chapter);
+    }
+    return updated;
+  };
+
+  const handleRetryChapter = async (index: number, type: 'translate' | 'proofread') => {
+    if (status !== AppStatus.IDLE && status !== AppStatus.ERROR && status !== AppStatus.COMPLETED) return;
+    
+    try {
+        const aiService = new AiService(config);
+        const chapters = chaptersRef.current;
+        const chapter = chapters[index];
+        
+        // Use AI split to recover original chunk structure
+        const sourceChunks = aiService.splitTextIntoChunks(chapter.markdown);
+        
+        // Sync local fallbacks with detection if needed
+        if (type === 'translate') {
+            const explicit = chapter.fallbackChunks || [];
+            const implicit: number[] = [];
+            // If translatedMarkdown exists but chunks are missing/mismatched, scan by content
+            sourceChunks.forEach((sChunk, i) => {
+                const trimmed = sChunk.trim();
+                if (trimmed.length > 20 && chapter.translatedMarkdown?.includes(trimmed)) {
+                    implicit.push(i);
+                }
+            });
+            chapter.fallbackChunks = [...new Set([...explicit, ...implicit])].sort((a,b) => a-b);
+            
+            // Re-initialize chunks array if it's stale/missing
+            if (!chapter.translatedChunks || chapter.translatedChunks.length !== sourceChunks.length) {
+                chapter.translatedChunks = new Array(sourceChunks.length).fill(null);
+            }
+        } else if (type === 'proofread') {
+            const explicit = chapter.fallbackProofreadChunks || [];
+            const implicit: number[] = [];
+            const tChunks = aiService.splitTextIntoChunks(chapter.translatedMarkdown || '');
+            tChunks.forEach((tChunk, i) => {
+                const trimmed = tChunk.trim();
+                if (trimmed.length > 20 && chapter.proofreadMarkdown?.includes(trimmed)) {
+                    implicit.push(i);
+                }
+            });
+            chapter.fallbackProofreadChunks = [...new Set([...explicit, ...implicit])].sort((a,b) => a-b);
+            
+            // Re-initialize chunks array if it's stale/missing
+            if (!chapter.proofreadChunks || chapter.proofreadChunks.length !== tChunks.length) {
+                chapter.proofreadChunks = new Array(tChunks.length).fill(null);
+            }
+        }
+
+        const effectiveSystemInstruction = config.useRecommendedPrompts 
+            ? RECOMMENDED_TRANSLATION_PROMPT 
+            : config.systemInstruction;
+            
+        const effectiveProofreadInstruction = config.useRecommendedPrompts
+            ? RECOMMENDED_PROOFREAD_PROMPT
+            : config.proofreadInstruction;
+
+        if (type === 'translate') {
+            const failedIndices = chapter.fallbackChunks || [];
+            // If still no failed indices, do we retry all? 
+            // Better to show an info log
+            if (failedIndices.length === 0 && chapter.translatedMarkdown) {
+                addLog(`Chapter "${chapter.title}" seems fully translated. Retrying the whole chapter for consistency...`, 'info');
+                // Pass empty array will retry whole chapter if service logic allows, 
+                // but our service logic for translateContent with empty fallbackIndices resumes from last chunk.
+                // To force retry all, we'd need to clear chapter.translatedChunks.
+                // For now, let's just let the service handle it - if chunks are missing it will fill.
+            }
+            await processChapter(index, aiService, chapters, effectiveSystemInstruction, effectiveProofreadInstruction, failedIndices, []);
+        } else {
+            const failedIndices = chapter.fallbackProofreadChunks || [];
+            await processChapter(index, aiService, chapters, effectiveSystemInstruction, effectiveProofreadInstruction, [], failedIndices);
+        }
+        
+        // Update percentages
+        const totalSteps = chapters.length * (config.enableProofreading ? 2 : 1);
+        const stepsDoneCount = chapters.reduce((acc, c) => {
+            if (config.smartSkip && c.isSkippable) return acc + (config.enableProofreading ? 2 : 1);
+            const tDone = c.translatedMarkdown ? 1 : 0;
+            const pDone = (config.enableProofreading && c.proofreadMarkdown) ? 1 : 0;
+            return acc + tDone + pDone;
+        }, 0);
+        const currentProgress = Math.min(100, (stepsDoneCount / totalSteps) * 100);
+        setProgress(currentProgress);
+        
+        // If reached 100% or was already completed, rebuild to ensure the download reflects the retry
+        // We use Math.floor to be safe with float precision
+        if ((status === AppStatus.COMPLETED || Math.floor(currentProgress) >= 100) && currentFile) {
+            await rebuildEpub(chapters, config, currentFile.name);
+        } else {
+            // Keep current status if it was COMPLETED (rebuildEpub will set it anyway)
+            // or stay IDLE/ERROR
+            if (status !== AppStatus.COMPLETED) {
+                setStatus(AppStatus.IDLE);
+            }
+        }
+       
+       // Force re-render of chapter list
+       setLogs([...logs]); 
+    } catch (e) {
+        addLog(`Retry failed: ${e instanceof Error ? e.message : 'Unknown error'}`, 'error');
+        setStatus(AppStatus.ERROR);
+    }
+  };
+
   const saveSessionState = async (currentStatus: AppStatus) => {
       if (!currentFile) return;
       await persistenceService.current.saveSession({
@@ -170,6 +395,35 @@ const App: React.FC = () => {
           coverPath: coverPathRef.current,
           lastUpdated: Date.now()
       });
+  };
+
+  const rebuildEpub = async (chaptersList: Chapter[], sessionConfig: AppConfig, fileName: string) => {
+    setStatus(AppStatus.PACKAGING);
+    addLog(`Recompiling EPUB...`, "process");
+    
+    try {
+        const chaptersToPack = sessionConfig.smartSkip 
+          ? chaptersList.filter(c => !c.isSkippable)
+          : chaptersList;
+
+        const images = await persistenceService.current.loadImages();
+        const blob = await epubService.current.generateEpub(
+          chaptersToPack, 
+          images, 
+          fileName.replace('.epub', '') || 'translated_book',
+          sessionConfig.targetLanguage,
+          coverPathRef.current
+        );
+        
+        const url = URL.createObjectURL(blob);
+        setDownloadUrl(url);
+        setStatus(AppStatus.COMPLETED);
+        addLog("EPUB is ready for download.", "success");
+        await saveSessionState(AppStatus.COMPLETED);
+    } catch (e) {
+        addLog(`Packaging failed: ${e instanceof Error ? e.message : 'Unknown error'}`, "error");
+        setStatus(AppStatus.ERROR);
+    }
   };
 
   const startProcessing = async () => {
@@ -206,10 +460,6 @@ const App: React.FC = () => {
       }
 
       const chapters = chaptersRef.current;
-      // const images = imagesRef.current; // MEMORY OPTIMIZATION: Don't load yet
-
-      // Step 2 & 3: Translate & Proofread Loop
-      const totalSteps = chapters.length * (config.enableProofreading ? 2 : 1);
       
       const effectiveSystemInstruction = config.useRecommendedPrompts 
         ? RECOMMENDED_TRANSLATION_PROMPT 
@@ -220,190 +470,37 @@ const App: React.FC = () => {
         : config.proofreadInstruction;
 
       addLog(`Starting translation using ${config.modelName}...`, "info");
+      if (viewMode === 'logs') setViewMode('chapters'); // Switch to chapters view automatically
+      
       if (config.smartSkip) {
         addLog("Smart Skip enabled: Title pages, Copyright, TOC will be REMOVED. References will be KEPT (untranslated).", "info");
       }
 
       for (let i = 0; i < chapters.length; i++) {
-        const chapter = chapters[i];
-        let updated = false;
+        await processChapter(i, aiService, chapters, effectiveSystemInstruction, effectiveProofreadInstruction);
         
-        // Skip empty chapters usually
-        if (!chapter.markdown || chapter.markdown.trim().length < 10) {
-           if (!chapter.translatedMarkdown) { // Only log if not already processed/skipped
-               addLog(`Skipping empty/short chapter: ${chapter.title}`, "info");
-           }
-           continue;
-        }
-        
-        // Handle Smart Skip Logic
-        if (config.smartSkip) {
-            // Case 1: Skippable (Copyright, TOC, etc.) -> Remove completely from output
-            if (chapter.isSkippable) {
-                 continue;
-            }
-
-            // Case 2: Reference (Bibliography, etc.) -> Keep but don't translate
-            if (chapter.isReference) {
-                if (!chapter.translatedMarkdown) {
-                    addLog(`Keeping reference chapter untranslated: ${chapter.title}`, "info");
-                    chapter.translatedMarkdown = chapter.markdown;
-                    chapter.proofreadMarkdown = chapter.markdown;
-                    updated = true;
-                }
-            }
-        }
-
-        // --- Translation ---
-        if (chapter.translatedMarkdown) {
-            // Already translated (or preserved as reference), move on
-        } else {
-            setStatus(AppStatus.TRANSLATING);
-            // Only log if we are actually doing work
-            addLog(`Translating [${i+1}/${chapters.length}]: ${chapter.title}`, "process");
-            
-            // Initialize chunks if needed
-            if (!chapter.translatedChunks) {
-                chapter.translatedChunks = [];
-            }
-            
-            const translated = await aiService.translateContent(
-              chapter.markdown, 
-              config.targetLanguage, 
-              effectiveSystemInstruction,
-              async (current, total, chunkResult, isFallback) => {
-                  if (isFallback) {
-                      addLog(`  > ⚠️ API returned empty/error for part ${current}/${total}. Kept original text.`, 'error');
-                  } else if (total > 1) {
-                      addLog(`  > Translating part ${current}/${total}...`, 'info');
-                  }
-                  
-                  // SAVE PROGRESS AFTER EACH CHUNK
-                  if (chapter.translatedChunks) {
-                      // Ensure we don't duplicate if logic is weird, but append is safer
-                      // Actually, we are passing existingChunks to service, so it returns new ones.
-                      // But here we want to update the chapter object in real-time.
-                      // The service returns the *current* chunk result in the callback.
-                      
-                      // We need to be careful: existingChunks passed to service are 0..N
-                      // The callback fires for N+1...M
-                      // So we can just push.
-                      // However, to be robust against race conditions or retries, 
-                      // we should trust the service's index? 
-                      // The service callback provides (current, total, result). 'current' is 1-based index.
-                      
-                      chapter.translatedChunks![current - 1] = chunkResult;
-                      
-                      // Save to DB
-                      await persistenceService.current.updateChapter(chapter);
-                      await saveSessionState(AppStatus.TRANSLATING);
-                  }
-              },
-              chapter.translatedChunks // Pass existing chunks to resume
-            );
-            chapter.translatedMarkdown = translated;
-            // Ensure chunks are fully synced (though they should be)
-            chapter.translatedChunks = translated.split('\n\n'); // Rough sync, or just keep what we have
-            updated = true;
-        }
-
         // Update progress
         const currentTotalSteps = chapters.length * (config.enableProofreading ? 2 : 1);
-        
-        // Calculate steps done. 
         const stepsDone = chapters.reduce((acc, c) => {
              if (config.smartSkip && c.isSkippable) return acc + (config.enableProofreading ? 2 : 1);
-             return acc + (c.translatedMarkdown ? 1 : 0) + (c.proofreadMarkdown ? 1 : 0);
+             const tDone = c.translatedMarkdown ? 1 : 0;
+             const pDone = (config.enableProofreading && c.proofreadMarkdown) ? 1 : 0;
+             return acc + tDone + pDone;
         }, 0);
         
-        const newProgress = (stepsDone / currentTotalSteps) * 100;
+        const newProgress = Math.min(100, (stepsDone / currentTotalSteps) * 100);
         setProgress(newProgress);
-
-        // Save after translation if updated
-        if (updated) {
-            await persistenceService.current.updateChapter(chapter);
-            await saveSessionState(AppStatus.TRANSLATING);
-        }
-
-        // --- Proofreading ---
-        updated = false;
-        if (config.enableProofreading) {
-          if (chapter.proofreadMarkdown) {
-              // Already proofread, move on
-          } else {
-              setStatus(AppStatus.PROOFREADING);
-              addLog(`Proofreading [${i+1}/${chapters.length}]: ${chapter.title}`, "process");
-              
-              if (!chapter.proofreadChunks) {
-                  chapter.proofreadChunks = [];
-              }
-
-              const proofread = await aiService.proofreadContent(
-                chapter.translatedMarkdown!, 
-                effectiveProofreadInstruction,
-                async (current, total, chunkResult, isFallback) => {
-                    if (isFallback) {
-                        addLog(`  > ⚠️ API returned empty/error for part ${current}/${total}. Kept original text.`, 'error');
-                    } else if (total > 1) {
-                        addLog(`  > Proofreading part ${current}/${total}...`, 'info');
-                    }
-                    
-                    if (chapter.proofreadChunks) {
-                        chapter.proofreadChunks![current - 1] = chunkResult;
-                        await persistenceService.current.updateChapter(chapter);
-                        await saveSessionState(AppStatus.PROOFREADING);
-                    }
-                },
-                chapter.proofreadChunks
-              );
-              chapter.proofreadMarkdown = proofread;
-              updated = true;
-              
-              // Update progress again
-               const stepsDoneAfter = chapters.reduce((acc, c) => {
-                    if (config.smartSkip && c.isSkippable) return acc + (config.enableProofreading ? 2 : 1);
-                    return acc + (c.translatedMarkdown ? 1 : 0) + (c.proofreadMarkdown ? 1 : 0);
-               }, 0);
-              const newProgressAfter = (stepsDoneAfter / currentTotalSteps) * 100;
-              setProgress(newProgressAfter);
-          }
-        }
-
-        // Save after proofreading if updated
-        if (updated) {
-            await persistenceService.current.updateChapter(chapter);
-            await saveSessionState(AppStatus.PROOFREADING);
-        }
+        await saveSessionState(status); 
       }
 
-      // Step 4: Repackage
-      setStatus(AppStatus.PACKAGING);
-      
-      const chaptersToPack = config.smartSkip 
-        ? chapters.filter(c => !c.isSkippable)
-        : chapters;
-
-      addLog(`Recompiling EPUB (Packaged ${chaptersToPack.length} / ${chapters.length} chapters)...`, "process");
-      
-      // MEMORY OPTIMIZATION: Load images just in time for packaging
-      addLog("Loading images from database...", "info");
-      const images = await persistenceService.current.loadImages();
-
-      const blob = await epubService.current.generateEpub(
-        chaptersToPack, 
-        images, 
-        currentFile?.name.replace('.epub', '') || 'translated_book',
-        config.targetLanguage,
-        coverPathRef.current
-      );
-      
-      const url = URL.createObjectURL(blob);
-      setDownloadUrl(url);
-      setProgress(100);
-      
-      setStatus(AppStatus.COMPLETED);
-      await saveSessionState(AppStatus.COMPLETED);
-      addLog("Workflow complete! Download ready.", "success");
+      // Final Step: Packaging
+      if (currentFile) {
+          setProgress(100);
+          await rebuildEpub(chapters, config, currentFile.name);
+      } else {
+          addLog("Missing file context for packaging.", "error");
+          setStatus(AppStatus.ERROR);
+      }
 
     } catch (error) {
       console.error(error);
@@ -432,7 +529,7 @@ const App: React.FC = () => {
                     <Save className="w-3.5 h-3.5" /> Session Restored
                 </span>
             )}
-            {status === AppStatus.COMPLETED && downloadUrl && (
+            {downloadUrl && status !== AppStatus.TRANSLATING && status !== AppStatus.PROOFREADING && status !== AppStatus.PARSING && status !== AppStatus.PACKAGING && (
             <a
                 href={downloadUrl}
                 download={`translated-${currentFile?.name || 'book'}`}
@@ -555,13 +652,31 @@ const App: React.FC = () => {
 
         {/* Right Panel: Logs & Progress */}
         <div className="w-full md:w-1/2 lg:w-7/12 bg-stone-900 text-stone-300 p-0 flex flex-col relative">
-          <div className="p-5 border-b border-stone-800 bg-stone-950 flex items-center justify-between z-10 shadow-sm">
-             <span className="font-mono text-xs tracking-widest uppercase text-stone-400">Workflow Console</span>
+          <div className="p-3 border-b border-stone-800 bg-stone-950 flex items-center justify-between z-10 shadow-sm px-5">
+             <div className="flex gap-2 p-1 bg-stone-900 rounded-lg border border-stone-800">
+                <button 
+                    onClick={() => setViewMode('logs')}
+                    className={`px-3 py-1.5 rounded-md text-[10px] font-mono tracking-widest uppercase transition-all ${
+                        viewMode === 'logs' ? 'bg-stone-800 text-stone-100 shadow-sm' : 'text-stone-500 hover:text-stone-300'
+                    }`}
+                >
+                    Console
+                </button>
+                <button 
+                    onClick={() => setViewMode('chapters')}
+                    className={`px-3 py-1.5 rounded-md text-[10px] font-mono tracking-widest uppercase transition-all ${
+                        viewMode === 'chapters' ? 'bg-stone-800 text-stone-100 shadow-sm' : 'text-stone-500 hover:text-stone-300'
+                    }`}
+                >
+                    Chapters ({chaptersRef.current.length})
+                </button>
+             </div>
+
              <div className="text-xs font-mono text-stone-400 bg-stone-800/50 px-3 py-1.5 rounded-full border border-stone-700/50">
                 {status !== AppStatus.IDLE && status !== AppStatus.COMPLETED && status !== AppStatus.ERROR ? (
                    <span className="flex items-center gap-2">
                      <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500" /> 
-                     {status}... {Math.round(progress)}%
+                     {status}...
                    </span>
                 ) : (
                     <span>{status}</span>
@@ -569,30 +684,205 @@ const App: React.FC = () => {
              </div>
           </div>
           
-          <div className="flex-1 overflow-y-auto p-8 font-mono text-sm leading-relaxed space-y-4 custom-scrollbar">
-            {logs.length === 0 && (
-                <div className="text-stone-600 italic text-center mt-20 font-serif text-xl">
-                    Awaiting manuscript...
+          <div className="flex-1 overflow-y-auto custom-scrollbar">
+            {viewMode === 'logs' ? (
+                <div className="p-8 font-mono text-sm leading-relaxed space-y-4">
+                    {logs.length === 0 && (
+                        <div className="text-stone-600 italic text-center mt-20 font-serif text-xl">
+                            Awaiting manuscript...
+                        </div>
+                    )}
+                    {logs.map((log, idx) => (
+                        <div key={idx} className={`flex gap-4 ${
+                            log.type === 'error' ? 'text-red-400' :
+                            log.type === 'success' ? 'text-emerald-400' :
+                            log.type === 'process' ? 'text-amber-200' : 'text-stone-400'
+                        }`}>
+                            <span className="opacity-40 shrink-0 select-none">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                            <span className="break-words">{log.message}</span>
+                        </div>
+                    ))}
+                    <div ref={logsEndRef} className="h-6" />
+                </div>
+            ) : (
+                <div className="p-6 space-y-3">
+                    {chaptersRef.current.length === 0 ? (
+                        <div className="text-stone-600 italic text-center mt-20 font-serif text-xl">
+                            No chapters extracted yet.
+                        </div>
+                    ) : (
+                        chaptersRef.current.map((chapter, idx) => {
+                            const ai = new AiService(config);
+                            const sourceChunks = ai.splitTextIntoChunks(chapter.markdown || '');
+                            
+                            // Detection Logic (Robust for old data)
+                            // We only use heuristic detection if explicit fallback indices are missing (undefined)
+                            // If chapter.fallbackChunks is an empty array [], it means the translation succeeded.
+                            let explicitFallbacks = chapter.fallbackChunks || [];
+                            let implicitFallbacks: number[] = [];
+                            
+                            if (chapter.translatedMarkdown && chapter.fallbackChunks === undefined) {
+                                // Method A: Check explicit chunks if they exist
+                                if (chapter.translatedChunks && chapter.translatedChunks.length === sourceChunks.length) {
+                                    chapter.translatedChunks.forEach((chunk, i) => {
+                                        if (i < sourceChunks.length && chunk && chunk.trim() === sourceChunks[i].trim() && !explicitFallbacks.includes(i)) {
+                                            implicitFallbacks.push(i);
+                                        }
+                                    });
+                                } 
+                                // Method B: Scan the whole markdown for source segments (threshold increased to 40 chars)
+                                if (implicitFallbacks.length === 0 && explicitFallbacks.length === 0) {
+                                    sourceChunks.forEach((sChunk, i) => {
+                                        const trimmed = sChunk.trim();
+                                        if (trimmed.length > 40 && chapter.translatedMarkdown!.includes(trimmed)) {
+                                            implicitFallbacks.push(i);
+                                        }
+                                    });
+                                }
+                            }
+                            
+                            const detectedFallbacks = [...new Set([...explicitFallbacks, ...implicitFallbacks])].sort((a, b) => a - b);
+                            const hasFallbacks = detectedFallbacks.length > 0;
+                            
+                            // Similar logic for proofreading
+                            const explicitProofreadFallbacks = chapter.fallbackProofreadChunks || [];
+                            const implicitProofreadFallbacks: number[] = [];
+                            if (chapter.proofreadMarkdown && chapter.translatedMarkdown && chapter.fallbackProofreadChunks === undefined) {
+                                 if (chapter.proofreadChunks && chapter.translatedChunks && chapter.proofreadChunks.length === chapter.translatedChunks.length) {
+                                    chapter.proofreadChunks.forEach((chunk, i) => {
+                                        if (chunk && chunk.trim() === chapter.translatedChunks![i].trim() && !explicitProofreadFallbacks.includes(i)) {
+                                            implicitProofreadFallbacks.push(i);
+                                        }
+                                    });
+                                 } else if (explicitProofreadFallbacks.length === 0) {
+                                    const tChunks = ai.splitTextIntoChunks(chapter.translatedMarkdown);
+                                    tChunks.forEach((tChunk, i) => {
+                                        const trimmed = tChunk.trim();
+                                        if (trimmed.length > 40 && chapter.proofreadMarkdown!.includes(trimmed)) {
+                                            implicitProofreadFallbacks.push(i);
+                                        }
+                                    });
+                                 }
+                            }
+                            
+                            const detectedProofreadFallbacks = [...new Set([...explicitProofreadFallbacks, ...implicitProofreadFallbacks])].sort((a, b) => a - b);
+                            const hasProofreadFallbacks = detectedProofreadFallbacks.length > 0;
+
+                        const isDone = chapter.translatedMarkdown && (!config.enableProofreading || chapter.proofreadMarkdown);
+                        const isSkipped = config.smartSkip && chapter.isSkippable;
+                        const isPartiallyDone = (chapter.translatedMarkdown || chapter.proofreadMarkdown) && (hasFallbacks || hasProofreadFallbacks);
+
+                        return (
+                            <div key={chapter.id} className={`group border rounded-xl p-4 transition-all ${
+                                isSkipped ? 'bg-stone-950/20 border-stone-800/50 opacity-50' :
+                                isPartiallyDone ? 'bg-amber-500/5 border-amber-600/40 hover:border-amber-500/60 shadow-[inset_0_0_15px_-5px_rgba(245,158,11,0.2)]' :
+                                isDone ? 'bg-stone-850/40 border-stone-800 hover:border-emerald-900/40' :
+                                'bg-stone-900 border-stone-800 hover:border-amber-900/40'
+                            }`}>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-4">
+                                        <span className="text-[10px] font-mono opacity-30 w-6">{idx + 1}</span>
+                                        <div className="flex flex-col">
+                                            <div className="flex items-center gap-2">
+                                                <span className={`font-medium transition-colors ${
+                                                    isSkipped ? 'text-stone-600' :
+                                                    isPartiallyDone ? 'text-amber-500 font-bold' :
+                                                    isDone ? 'text-emerald-400/90' : 'text-stone-200'
+                                                }`}>
+                                                    {chapter.title || 'Untitled Chapter'}
+                                                </span>
+                                                {isPartiallyDone && (
+                                                    <div className="flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                                                        <AlertTriangle className="w-3 h-3 text-amber-500" />
+                                                        <span className="text-[9px] text-amber-500 uppercase font-bold tracking-tighter">Issue Detected</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="flex gap-2 mt-1.5 item-center">
+                                                {isSkipped ? (
+                                                     <span className="text-[9px] uppercase tracking-tighter text-stone-700 bg-stone-950 px-1.5 py-0.5 rounded">Removed</span>
+                                                ) : (
+                                                    <>
+                                                        <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 rounded flex items-center gap-1 ${
+                                                            chapter.translatedMarkdown 
+                                                                ? (detectedFallbacks.length > 0 ? 'bg-amber-950 text-amber-500 font-bold border border-amber-900/50' : 'bg-emerald-950/40 text-emerald-500') 
+                                                                : 'bg-stone-950 text-stone-600'
+                                                        }`}>
+                                                            Translate {detectedFallbacks.length > 0 && `(${detectedFallbacks.length} Fallback)`}
+                                                        </span>
+                                                        {config.enableProofreading && (
+                                                            <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 rounded flex items-center gap-1 ${
+                                                                chapter.proofreadMarkdown 
+                                                                    ? (detectedProofreadFallbacks.length > 0 ? 'bg-amber-950 text-amber-500 font-bold border border-amber-900/50' : 'bg-emerald-950/40 text-emerald-500')
+                                                                    : 'bg-stone-950 text-stone-600'
+                                                            }`}>
+                                                                Proofread {detectedProofreadFallbacks.length > 0 && `(${detectedProofreadFallbacks.length} Fallback)`}
+                                                            </span>
+                                                        )}
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {!isSkipped && (
+                                        <div className="flex gap-2">
+                                            {(hasFallbacks || status === AppStatus.IDLE || status === AppStatus.COMPLETED || status === AppStatus.ERROR) && (
+                                                <button 
+                                                    onClick={() => {
+                                                        // Sync detected fallbacks to the chapter object before retrying
+                                                        chapter.fallbackChunks = detectedFallbacks;
+                                                        // Ensure translatedChunks is at least pre-split if missing
+                                                        if (!chapter.translatedChunks || chapter.translatedChunks.length !== sourceChunks.length) {
+                                                            chapter.translatedChunks = new Array(sourceChunks.length).fill(null);
+                                                        }
+                                                        handleRetryChapter(idx, 'translate');
+                                                    }}
+                                                    disabled={status !== AppStatus.IDLE && status !== AppStatus.ERROR && status !== AppStatus.COMPLETED}
+                                                    className={`text-[10px] px-2.5 py-1 rounded border transition-all flex items-center gap-1.5 disabled:opacity-50 shadow-sm ${
+                                                        hasFallbacks 
+                                                            ? 'bg-amber-600 hover:bg-amber-500 text-stone-950 border-amber-400 font-bold animate-pulse' 
+                                                            : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border-stone-700 opacity-0 group-hover:opacity-100'
+                                                    }`}
+                                                >
+                                                    <RefreshCw className="w-3 h-3" /> {hasFallbacks ? `Retry ${detectedFallbacks.length} Chunks` : 'Re-Translate'}
+                                                </button>
+                                            )}
+                                            {config.enableProofreading && (hasProofreadFallbacks || (chapter.proofreadMarkdown && (status === AppStatus.IDLE || status === AppStatus.COMPLETED || status === AppStatus.ERROR))) && (
+                                                 <button 
+                                                    onClick={() => {
+                                                        chapter.fallbackProofreadChunks = detectedProofreadFallbacks;
+                                                        if (!chapter.proofreadChunks || chapter.proofreadChunks.length !== (chapter.translatedChunks?.length || sourceChunks.length)) {
+                                                            chapter.proofreadChunks = new Array(sourceChunks.length).fill(null);
+                                                        }
+                                                        handleRetryChapter(idx, 'proofread');
+                                                    }}
+                                                    disabled={status !== AppStatus.IDLE && status !== AppStatus.ERROR && status !== AppStatus.COMPLETED}
+                                                    className={`text-[10px] px-2.5 py-1 rounded border transition-all flex items-center gap-1.5 disabled:opacity-50 shadow-sm ${
+                                                        hasProofreadFallbacks 
+                                                            ? 'bg-amber-600 hover:bg-amber-500 text-stone-950 border-amber-400 font-bold animate-pulse' 
+                                                            : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border-stone-700 opacity-0 group-hover:opacity-100'
+                                                    }`}
+                                                >
+                                                    <RefreshCw className="w-3 h-3" /> {hasProofreadFallbacks ? `Proof Retry ${detectedProofreadFallbacks.length}` : 'Re-Proofread'}
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })
+                    )}
                 </div>
             )}
-            {logs.map((log, idx) => (
-                <div key={idx} className={`flex gap-4 ${
-                    log.type === 'error' ? 'text-red-400' :
-                    log.type === 'success' ? 'text-emerald-400' :
-                    log.type === 'process' ? 'text-amber-200' : 'text-stone-400'
-                }`}>
-                    <span className="opacity-40 shrink-0 select-none">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
-                    <span className="break-words">{log.message}</span>
-                </div>
-            ))}
-            <div ref={logsEndRef} className="h-6" />
           </div>
 
           {/* Progress Bar (Visual) */}
           <div className="h-1.5 bg-stone-900 w-full absolute bottom-0 left-0">
             <div 
                 className={`h-full transition-all duration-500 ease-out ${status === AppStatus.ERROR ? 'bg-red-500' : 'bg-amber-500'}`}
-                style={{ width: `${progress}%` }}
+                style={{ width: `${Math.min(100, progress)}%` }}
             />
           </div>
         </div>

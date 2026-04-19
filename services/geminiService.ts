@@ -27,10 +27,17 @@ export class AiService {
       
       const errString = String(error) + (typeof error === 'object' ? JSON.stringify(error) : '');
       const isRateLimit = errString.includes('429');
-      // Don't retry on Auth errors, Bad Request, or Empty Response
-      const isFatal = errString.includes('401') || errString.includes('403') || errString.includes('400') || errString.includes('empty response');
+      const isAuthError = errString.includes('401') || errString.includes('403');
 
-      if (isFatal) throw error;
+      if (isAuthError) throw error; // Never retry auth errors
+
+      const isEmptyOrBadRequest = errString.includes('400') || errString.includes('empty response');
+      
+      // Allow exactly 1 retry for empty responses or 400 errors.
+      // Since default retries is 3, if retries <= 2, we've already retried once.
+      if (isEmptyOrBadRequest && retries <= 2) {
+          throw error;
+      }
 
       let nextDelay = delay;
 
@@ -50,7 +57,7 @@ export class AiService {
   /**
    * Splits text into manageable chunks.
    */
-  private splitTextIntoChunks(text: string): string[] {
+  public splitTextIntoChunks(text: string): string[] {
     if (!text || text.length <= this.CHUNK_SIZE) return [text];
 
     const chunks: string[] = [];
@@ -197,31 +204,26 @@ export class AiService {
     targetLanguage: string, 
     systemInstruction: string,
     onProgress?: (current: number, total: number, chunkResult: string, isFallback?: boolean) => Promise<void>,
-    existingChunks: string[] = []
+    existingChunks: string[] = [],
+    indicesToRetry: number[] = []
   ): Promise<string> {
     
     const chunks = this.splitTextIntoChunks(content);
     const translatedChunks: string[] = [...existingChunks];
 
+    // Ensure array is large enough
+    while (translatedChunks.length < chunks.length) {
+        translatedChunks.push("");
+    }
+
     const baseSystemInstruction = `${systemInstruction}\n\nIMPORTANT: Return ONLY the translated Markdown content. No conversational text.`;
 
-    // Resume from the next chunk
-    for (let i = existingChunks.length; i < chunks.length; i++) {
-        // Report progress (start)
-        if (onProgress) {
-            // We pass empty string for result here just to notify start
-            // But actually, onProgress is better used AFTER completion to save.
-            // Let's assume the caller handles UI updates separately or we add a separate callback.
-            // For simplicity, we'll just log start here if needed, but the main goal is SAVING.
-        }
-
-        // Add polite delay for rate limits
+    const translateChunk = async (i: number) => {
         if (i > 0) {
             await new Promise(resolve => setTimeout(resolve, 500));
         }
 
         const chunk = chunks[i];
-        
         const chunkInstruction = chunks.length > 1
             ? `${baseSystemInstruction}\n\n[System Note: This is part ${i + 1} of ${chunks.length} of the chapter. Maintain strict terminology and stylistic consistency with previous parts.]`
             : baseSystemInstruction;
@@ -230,30 +232,35 @@ export class AiService {
 
         try {
             const result = await this.generate(prompt, chunkInstruction, 0.3);
-            translatedChunks.push(result);
+            translatedChunks[i] = result;
             
-            // Notify progress and SAVE
             if (onProgress) {
-                try {
-                    await onProgress(i + 1, chunks.length, result);
-                } catch (progressError) {
-                    console.error("Failed to save progress:", progressError);
-                }
+                await onProgress(i + 1, chunks.length, result);
             }
         } catch (error) {
             console.error(`Error translating chunk ${i + 1}/${chunks.length}:`, error);
-            console.error("Failed chunk content:\n", chunk);
-            console.warn(`Falling back to original content for chunk ${i + 1}`);
-            
-            // Fault tolerance: keep the original chunk if translation fails
-            translatedChunks.push(chunk);
+            translatedChunks[i] = chunk;
             if (onProgress) {
-                try {
-                    await onProgress(i + 1, chunks.length, chunk, true);
-                } catch (progressError) {
-                    console.error("Failed to save fallback progress:", progressError);
-                }
+                await onProgress(i + 1, chunks.length, chunk, true);
             }
+        }
+    };
+
+    // 1. Resume from where we left off (sequential)
+    const startIndex = existingChunks.length > 0 ? existingChunks.findIndex(c => !c) : 0;
+    const start = startIndex === -1 ? existingChunks.length : startIndex;
+
+    for (let i = start; i < chunks.length; i++) {
+        // Only process if it's empty OR we haven't reached the end of existing chunks
+        if (i >= existingChunks.length || !existingChunks[i]) {
+            await translateChunk(i);
+        }
+    }
+
+    // 2. Explicit retries
+    for (const i of indicesToRetry) {
+        if (i < chunks.length) {
+            await translateChunk(i);
         }
     }
 
@@ -264,13 +271,18 @@ export class AiService {
     content: string, 
     instruction: string,
     onProgress?: (current: number, total: number, chunkResult: string, isFallback?: boolean) => Promise<void>,
-    existingChunks: string[] = []
+    existingChunks: string[] = [],
+    indicesToRetry: number[] = []
   ): Promise<string> {
     
     const chunks = this.splitTextIntoChunks(content);
     const proofreadChunks: string[] = [...existingChunks];
 
-    for (let i = existingChunks.length; i < chunks.length; i++) {
+    while (proofreadChunks.length < chunks.length) {
+        proofreadChunks.push("");
+    }
+
+    const proofreadChunk = async (i: number) => {
         if (i > 0) {
             await new Promise(resolve => setTimeout(resolve, 500));
         }
@@ -280,29 +292,32 @@ export class AiService {
         
         try {
             const result = await this.generate(prompt, "You are a specialized proofreading assistant. Return ONLY the proofread Markdown.", 0.1);
-            proofreadChunks.push(result);
+            proofreadChunks[i] = result;
             
             if (onProgress) {
-                try {
-                    await onProgress(i + 1, chunks.length, result);
-                } catch (progressError) {
-                    console.error("Failed to save progress:", progressError);
-                }
+                await onProgress(i + 1, chunks.length, result);
             }
         } catch (error) {
             console.error(`Error proofreading chunk ${i + 1}/${chunks.length}:`, error);
-            console.error("Failed chunk content:\n", chunk);
-            console.warn(`Falling back to original content for chunk ${i + 1}`);
-            
-            // Fault tolerance: keep the original chunk if proofreading fails
-            proofreadChunks.push(chunk);
+            proofreadChunks[i] = chunk;
             if (onProgress) {
-                try {
-                    await onProgress(i + 1, chunks.length, chunk, true);
-                } catch (progressError) {
-                    console.error("Failed to save fallback progress:", progressError);
-                }
+                await onProgress(i + 1, chunks.length, chunk, true);
             }
+        }
+    };
+
+    const startIndex = existingChunks.length > 0 ? existingChunks.findIndex(c => !c) : 0;
+    const start = startIndex === -1 ? existingChunks.length : startIndex;
+
+    for (let i = start; i < chunks.length; i++) {
+        if (i >= existingChunks.length || !existingChunks[i]) {
+            await proofreadChunk(i);
+        }
+    }
+
+    for (const i of indicesToRetry) {
+        if (i < chunks.length) {
+            await proofreadChunk(i);
         }
     }
 

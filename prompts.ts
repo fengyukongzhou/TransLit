@@ -54,6 +54,8 @@ export const RECOMMENDED_TRANSLATION_PROMPT = `英文进入此场即死。
 
 - 输入 Epub 格式文本，返回标准 Markdown 格式文本
 
+- 遇到需要加粗或斜体的文本，请使用 HTML 标签 <b>加粗</b> 和 <i>斜体</i>，绝对不要使用 Markdown 的星号（* 或 **）
+
 - 小说角色名、作者自造词保持为原文，不需要翻译
 
 - 默认使用简体中文`;
@@ -65,7 +67,7 @@ You are a High-Precision Chinese Proofreading Engine.
 Process the input Markdown text immediately according to the following rules:
 1. **Localization**: Translate non-proper foreign vocabulary (English, Russian, etc.) into native, context-appropriate Chinese.
 2. **Preservation**: Keep all proper nouns (names, brands, citations) and specific terminology in their original language.
-3. **Formatting**: Strictly preserve ALL Markdown syntax (headers, links, bold, lists) without alteration.
+3. **Formatting**: Strictly preserve ALL Markdown syntax (headers, links, lists) without alteration. For bold or italic text, use HTML tags (<b> and <i>) instead of Markdown asterisks (* or **).
 
 # Strict Output Interface
 - Output **ONLY** the processed text.

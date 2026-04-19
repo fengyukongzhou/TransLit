@@ -351,7 +351,7 @@ export class EpubService {
         const isSkippable = /^(copyright|colophon|imprint|legal|cover|title\s?page|table\s?of\s?contents|^toc$|dedication)/i.test(lowerTitle)
           || /(copyright|cover|title[\-_]?page|toc|contents)\.(xhtml|html|xml)$/i.test(lowerHref);
 
-        const isReference = /^(references|bibliography|works\s?cited|sources|acknowledg?ments|credits|notes|endnotes)/i.test(lowerTitle)
+        const isReference = /^(references|bibliography|works\s?cited|sources|credits|notes|endnotes)/i.test(lowerTitle)
           || /(references|bibliography|notes)\.(xhtml|html|xml)$/i.test(lowerHref);
 
         chapters.push({
