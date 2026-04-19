@@ -189,6 +189,8 @@ const App: React.FC = () => {
                 addLog(`Keeping reference chapter untranslated: ${chapter.title}`, "info");
                 chapter.translatedMarkdown = chapter.markdown;
                 chapter.proofreadMarkdown = chapter.markdown;
+                chapter.fallbackChunks = [];
+                chapter.fallbackProofreadChunks = [];
                 updated = true;
                 await persistenceService.current.updateChapter(chapter);
             }
@@ -721,7 +723,10 @@ const App: React.FC = () => {
                             let explicitFallbacks = chapter.fallbackChunks || [];
                             let implicitFallbacks: number[] = [];
                             
-                            if (chapter.translatedMarkdown && chapter.fallbackChunks === undefined) {
+                            // Skip heuristic detection for reference chapters when smart skip is on
+                            const shouldSkipHeuristic = config.smartSkip && chapter.isReference;
+                            
+                            if (chapter.translatedMarkdown && chapter.fallbackChunks === undefined && !shouldSkipHeuristic) {
                                 // Method A: Check explicit chunks if they exist
                                 if (chapter.translatedChunks && chapter.translatedChunks.length === sourceChunks.length) {
                                     chapter.translatedChunks.forEach((chunk, i) => {
@@ -747,7 +752,7 @@ const App: React.FC = () => {
                             // Similar logic for proofreading
                             const explicitProofreadFallbacks = chapter.fallbackProofreadChunks || [];
                             const implicitProofreadFallbacks: number[] = [];
-                            if (chapter.proofreadMarkdown && chapter.translatedMarkdown && chapter.fallbackProofreadChunks === undefined) {
+                            if (chapter.proofreadMarkdown && chapter.translatedMarkdown && chapter.fallbackProofreadChunks === undefined && !shouldSkipHeuristic) {
                                  if (chapter.proofreadChunks && chapter.translatedChunks && chapter.proofreadChunks.length === chapter.translatedChunks.length) {
                                     chapter.proofreadChunks.forEach((chunk, i) => {
                                         if (chunk && chunk.trim() === chapter.translatedChunks![i].trim() && !explicitProofreadFallbacks.includes(i)) {
@@ -770,7 +775,8 @@ const App: React.FC = () => {
 
                         const isDone = chapter.translatedMarkdown && (!config.enableProofreading || chapter.proofreadMarkdown);
                         const isSkipped = config.smartSkip && chapter.isSkippable;
-                        const isPartiallyDone = (chapter.translatedMarkdown || chapter.proofreadMarkdown) && (hasFallbacks || hasProofreadFallbacks);
+                        const isPartiallyDone = (chapter.translatedMarkdown || (config.enableProofreading && chapter.proofreadMarkdown)) && 
+                                              (hasFallbacks || (config.enableProofreading && hasProofreadFallbacks));
 
                         return (
                             <div key={chapter.id} className={`group border rounded-xl p-4 transition-all ${
