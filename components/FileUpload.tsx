@@ -76,12 +76,12 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }) => {
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`border border-dashed rounded-2xl transition-all duration-300 group
+      className={`border border-dashed rounded-none transition-all duration-300 group
         ${disabled 
-          ? 'opacity-50 cursor-not-allowed border-stone-200 bg-stone-50' 
+          ? 'opacity-50 cursor-not-allowed border-neutral-300 bg-neutral-50' 
           : isDragging 
-            ? 'border-amber-500 bg-amber-50/50 ring-4 ring-amber-500/10' 
-            : 'border-stone-300 hover:border-amber-400 hover:bg-[#fcfcfb] bg-white shadow-sm hover:shadow-md'
+            ? 'border-black bg-neutral-100 ring-1 ring-black' 
+            : 'border-black hover:border-black hover:bg-neutral-50 bg-white'
         }`}
     >
       <input
@@ -96,23 +96,23 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }) => {
         htmlFor="epub-upload" 
         className={`flex flex-col items-center justify-center w-full p-8 gap-4 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
       >
-        <div className={`p-4 rounded-full shrink-0 transition-all duration-300 ${isDragging ? 'bg-amber-100 scale-110' : 'bg-stone-100 group-hover:bg-amber-50 group-hover:scale-105'}`}>
+        <div className={`p-4 rounded-none border border-black shrink-0 transition-all duration-300 ${isDragging ? 'bg-black scale-110' : 'bg-white group-hover:bg-black group-hover:scale-105'}`}>
           {isDragging ? (
-            <FileUp className={`w-8 h-8 ${isDragging ? 'text-amber-600' : 'text-stone-400'}`} />
+            <FileUp className={`w-8 h-8 text-white`} />
           ) : (
-            <Upload className="w-8 h-8 text-stone-400 group-hover:text-amber-600 transition-colors" />
+            <Upload className="w-8 h-8 text-black group-hover:text-white transition-colors" />
           )}
         </div>
         
         <div className="flex flex-col items-center text-center">
-          <h3 className={`font-serif text-lg font-medium transition-colors ${isDragging ? 'text-amber-700' : 'text-stone-800'}`}>
+          <h3 className={`font-mono uppercase tracking-widest text-lg font-medium transition-colors ${isDragging ? 'text-black' : 'text-black'}`}>
             {isDragging ? "Drop Manuscript Here" : "Upload Manuscript"}
           </h3>
-          <p className={`text-sm mt-1.5 transition-colors ${isDragging ? 'text-amber-600/80' : 'text-stone-500'}`}>
+          <p className={`text-sm mt-1.5 font-mono transition-colors ${isDragging ? 'text-black' : 'text-neutral-500'}`}>
             {isDragging ? "Release to begin processing" : "Drag & drop your EPUB file, or click to browse"}
           </p>
           {error && (
-            <p className="text-sm mt-3 text-red-600 font-medium bg-red-50 px-3 py-1 rounded-full border border-red-100">
+            <p className="text-sm mt-3 text-white font-mono bg-black px-3 py-1 rounded-none border border-black">
               {error}
             </p>
           )}

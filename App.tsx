@@ -1,13 +1,14 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  BookOpen, FileCheck, Loader2, Download, AlertTriangle, 
+  FileCheck, Loader2, Download, AlertTriangle, 
   RefreshCw, Trash2, Save, Info, Plus, X, Eye, Ban, FileCode,
   CheckCircle2, Eraser, Pause, Sparkles
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import FileUpload from './components/FileUpload';
 import SettingsPanel from './components/SettingsPanel';
+import logoUrl from './logo.svg';
 import { EpubService } from './services/epubService';
 import { AiService } from './services/geminiService';
 import { PersistenceService } from './services/persistenceService';
@@ -16,8 +17,8 @@ import { RECOMMENDED_TRANSLATION_PROMPT, TWO_STEP_BASE_PROMPT } from './prompts'
 
 const DEFAULT_CONFIG: AppConfig = {
   apiKey: '',
-  baseUrl: 'https://integrate.api.nvidia.com/v1',
-  modelName: 'minimaxai/minimax-m2.1',
+  baseUrl: '',
+  modelName: '',
   sourceLanguage: 'English',
   additionalContext: '',
   enableProofreading: true,
@@ -177,6 +178,18 @@ const App: React.FC = () => {
     const init = async () => {
       try {
         await persistenceService.current.init();
+
+        // Load API configuration cache from LocalStorage
+        const savedApiConfigStr = localStorage.getItem('translit_api_config');
+        let localApiConfig = {};
+        if (savedApiConfigStr) {
+          try {
+            localApiConfig = JSON.parse(savedApiConfigStr);
+          } catch (e) {
+            console.error("Failed to parse saved api config:", e);
+          }
+        }
+
         const session = await persistenceService.current.loadSession();
         
         if (session && session.fileName) {
@@ -200,8 +213,8 @@ const App: React.FC = () => {
                 setGlossaryMap(savedGlossary);
                 setLiveGlossary(glossaryToOutputStr(savedGlossary));
                 
-                // Restore UI state
-                setConfig(session.config);
+                // Restore UI state, merging with LocalStorage configurations
+                setConfig({ ...session.config, ...localApiConfig });
                 setLogs(savedLogs);
                 setProgress(session.progress);
                 
@@ -240,6 +253,9 @@ const App: React.FC = () => {
                 const dummyFile = { name: session.fileName } as File;
                 setCurrentFile(dummyFile);
             }
+        } else {
+            // Apply local API configurations if no prior session exists
+            setConfig(prev => ({ ...prev, ...localApiConfig }));
         }
       } catch (e) {
         console.error("Failed to initialize persistence:", e);
@@ -1078,21 +1094,19 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#f5f5f0]">
+    <div className="flex flex-col h-full bg-white">
       {/* Header */}
-      <header className="bg-[#f5f5f0] border-b border-stone-200 px-8 py-5 flex items-center justify-between flex-shrink-0">
+      <header className="bg-white border-b border-black px-8 py-5 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-4">
-          <div className="bg-stone-800 p-2.5 rounded-full shadow-sm">
-            <BookOpen className="text-[#f5f5f0] w-5 h-5" />
-          </div>
+          <img src={logoUrl} alt="TransLit Logo" className="w-8 h-8 object-contain" />
           <div>
-            <h1 className="text-2xl font-serif font-medium text-stone-900 tracking-tight">TransLit</h1>
-            <p className="text-[10px] font-medium text-stone-500 uppercase tracking-widest mt-0.5">Literary Translation Engine</p>
+            <h1 className="text-2xl font-mono font-bold text-black tracking-widest uppercase">TransLit</h1>
+            <p className="text-[10px] font-mono font-bold text-neutral-500 uppercase tracking-widest mt-0.5">Literary Translation Engine</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
             {restoredSession && status !== AppStatus.TRANSLATING && (
-                <span className="text-xs text-amber-700 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200/60 flex items-center gap-1.5 font-medium shadow-sm">
+                <span className="text-[10px] text-black bg-neutral-100 px-3 py-1.5 rounded-none border border-black flex items-center gap-1.5 font-mono uppercase tracking-widest shadow-none">
                     <Save className="w-3.5 h-3.5" /> Session Restored
                 </span>
             )}
@@ -1100,7 +1114,7 @@ const App: React.FC = () => {
             <a
                 href={downloadUrl}
                 download={currentFile?.name ? currentFile.name.replace(/\.epub$/i, '【TransLit】.epub') : 'book【TransLit】.epub'}
-                className="flex items-center gap-2 bg-stone-800 hover:bg-stone-900 text-[#f5f5f0] px-5 py-2.5 rounded-full text-sm font-medium transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5"
+                className="flex items-center gap-2 bg-black hover:bg-neutral-800 text-white px-5 py-2.5 rounded-none text-[10px] font-mono tracking-widest uppercase transition-all shadow-none"
             >
                 <Download className="w-4 h-4" /> Download EPUB
             </a>
@@ -1112,7 +1126,7 @@ const App: React.FC = () => {
       <main className="flex-1 overflow-hidden flex flex-col md:flex-row">
         
         {/* Left Panel: Configuration & Input */}
-        <div className="w-full md:w-1/2 lg:w-5/12 p-8 overflow-y-auto border-r border-stone-200 custom-scrollbar">
+        <div className="w-full md:w-1/2 lg:w-5/12 p-8 overflow-y-auto border-r border-black custom-scrollbar bg-white">
           
           <div className="max-w-xl mx-auto space-y-8">
             <SettingsPanel 
@@ -1127,31 +1141,31 @@ const App: React.FC = () => {
             />
 
             {currentFile && (
-               <div className="bg-white border border-stone-200 rounded-2xl p-6 shadow-sm hover:shadow-md transition-shadow">
+               <div className="bg-white border border-black rounded-none p-6 shadow-none transition-shadow">
                  <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-4">
-                        <div className="bg-amber-50 p-3 rounded-xl border border-amber-100/50">
-                            <FileCheck className="text-amber-600 w-6 h-6" />
+                        <div className="bg-black p-3 rounded-none border border-black">
+                            <FileCheck className="text-white w-6 h-6" />
                         </div>
                         <div className="flex flex-col">
-                            <span className="font-serif text-lg font-medium text-stone-800 truncate max-w-[220px]">{currentFile.name}</span>
-                            <span className="text-xs text-stone-400 uppercase tracking-widest mt-0.5">Ready for processing</span>
+                            <span className="font-mono text-sm font-bold text-black truncate max-w-[220px] uppercase tracking-wider">{currentFile.name}</span>
+                            <span className="text-[10px] text-neutral-500 font-mono uppercase tracking-widest mt-0.5">Ready for processing</span>
                         </div>
                     </div>
                     {/* Clear Button */}
                      {!isWorking && (
                         showConfirmReset ? (
-                            <div className="flex items-center gap-1 bg-stone-50 rounded-full p-1 border border-stone-200 shadow-sm">
-                                <span className="text-[11px] text-stone-500 font-medium px-2 uppercase tracking-wider">Clear?</span>
+                            <div className="flex items-center gap-1 bg-white rounded-none p-1 border border-black shadow-none font-mono">
+                                <span className="text-[11px] text-black font-bold px-2 uppercase tracking-wider">Clear?</span>
                                 <button 
                                     onClick={handleReset}
-                                    className="text-red-600 hover:bg-red-100 px-3 py-1.5 rounded-full text-xs font-medium transition-colors"
+                                    className="text-white bg-black hover:bg-neutral-800 px-3 py-1.5 rounded-none text-[10px] font-bold uppercase tracking-widest transition-colors border border-black"
                                 >
                                     Yes
                                 </button>
                                 <button 
                                     onClick={() => setShowConfirmReset(false)}
-                                    className="text-stone-600 hover:bg-stone-200 px-3 py-1.5 rounded-full text-xs font-medium transition-colors"
+                                    className="text-black bg-white hover:bg-neutral-100 px-3 py-1.5 rounded-none text-[10px] font-bold uppercase tracking-widest transition-colors border border-transparent hover:border-black"
                                 >
                                     No
                                 </button>
@@ -1159,7 +1173,7 @@ const App: React.FC = () => {
                         ) : (
                             <button 
                                 onClick={() => setShowConfirmReset(true)}
-                                className="text-stone-400 hover:text-red-500 transition-colors p-2.5 hover:bg-red-50 rounded-full"
+                                className="text-black hover:text-white transition-colors p-2.5 hover:bg-black rounded-none border border-transparent hover:border-black"
                                 title="Remove file and clear progress"
                             >
                                 <Trash2 className="w-4 h-4"/>
@@ -1173,7 +1187,7 @@ const App: React.FC = () => {
                     {(status === AppStatus.IDLE || status === AppStatus.PAUSED) && (
                     <button
                         onClick={() => startProcessing(getActionText().includes("Retry") ? "retry" : "normal")}
-                        className="flex-1 bg-stone-800 hover:bg-stone-900 text-[#f5f5f0] px-5 py-3.5 rounded-2xl text-sm font-medium transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5"
+                        className="flex-1 bg-black hover:bg-neutral-800 text-white px-5 py-3.5 rounded-none text-[10px] font-mono tracking-widest uppercase transition-all shadow-none border border-black"
                     >
                         {getActionText()}
                     </button>
@@ -1183,7 +1197,7 @@ const App: React.FC = () => {
                     {(status === AppStatus.TRANSLATING ||  status === AppStatus.PARSING) && (
                         <button 
                             onClick={handlePause}
-                            className="flex-1 bg-amber-100 hover:bg-amber-200 text-amber-900 px-5 py-3.5 rounded-2xl text-sm font-medium transition-all shadow-md flex items-center justify-center gap-2 border border-amber-200"
+                            className="flex-1 bg-white hover:bg-black hover:text-white text-black px-5 py-3.5 rounded-none text-[10px] font-mono tracking-widest uppercase transition-all shadow-none flex items-center justify-center gap-2 border border-black"
                         >
                             <Pause className="w-4 h-4" /> Pause Translation
                         </button>
@@ -1193,7 +1207,7 @@ const App: React.FC = () => {
                     {status === AppStatus.ERROR && (
                     <button
                         onClick={() => startProcessing(getActionText().includes("Retry") ? "retry" : "normal")}
-                        className="flex-1 bg-amber-700 hover:bg-amber-800 text-white px-5 py-3.5 rounded-2xl text-sm font-medium transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5 flex items-center justify-center gap-2"
+                        className="flex-1 bg-black hover:bg-neutral-800 text-white px-5 py-3.5 rounded-none text-[10px] font-mono tracking-widest uppercase transition-all shadow-none flex items-center justify-center gap-2 border border-black"
                     >
                         <RefreshCw className="w-4 h-4" /> {getActionText()}
                     </button>
@@ -1203,7 +1217,7 @@ const App: React.FC = () => {
                      {status === AppStatus.COMPLETED && (
                         <button
                             onClick={() => startProcessing(getActionText().includes("Retry") ? "retry" : "normal")}
-                            className="flex-1 bg-stone-800 hover:bg-stone-900 text-[#f5f5f0] px-5 py-3.5 rounded-2xl text-sm font-medium transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5"
+                            className="flex-1 bg-black hover:bg-neutral-800 text-white px-5 py-3.5 rounded-none text-[10px] font-mono tracking-widest uppercase transition-all shadow-none border border-black"
                         >
                             {getActionText()}
                         </button>
@@ -1213,11 +1227,11 @@ const App: React.FC = () => {
             )}
             
             {status === AppStatus.PAUSED && (
-                <div className="bg-amber-50 border border-amber-100 text-amber-800 p-5 rounded-2xl flex items-start gap-4 text-sm shadow-sm">
-                    <Info className="w-5 h-5 shrink-0 mt-0.5 text-amber-600" />
+                <div className="bg-white border border-black text-black p-5 rounded-none flex items-start gap-4 text-sm shadow-none font-mono">
+                    <Info className="w-5 h-5 shrink-0 mt-0.5 text-black" />
                     <div className="flex flex-col gap-1.5">
-                        <span className="font-serif text-base font-medium">Process Paused</span>
-                        <span className="text-amber-700/80 leading-relaxed">
+                        <span className="font-bold text-xs uppercase tracking-widest">Process Paused</span>
+                        <span className="text-neutral-500 leading-relaxed text-[10px]">
                             The process has been paused by the user. 
                             Your progress is safely saved. Click "{getActionText()}" to continue exactly where you left off.
                         </span>
@@ -1226,11 +1240,11 @@ const App: React.FC = () => {
             )}
             
             {status === AppStatus.ERROR && (
-                <div className="bg-red-50 border border-red-100 text-red-800 p-5 rounded-2xl flex items-start gap-4 text-sm shadow-sm">
-                    <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-red-600" />
+                <div className="bg-white border border-black text-black p-5 rounded-none flex items-start gap-4 text-sm shadow-none font-mono">
+                    <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-black" />
                     <div className="flex flex-col gap-1.5">
-                        <span className="font-serif text-base font-medium">Process Error</span>
-                        <span className="text-red-700/80 leading-relaxed">
+                        <span className="font-bold text-xs uppercase tracking-widest">Process Error</span>
+                        <span className="text-neutral-500 leading-relaxed text-[10px]">
                             The process was interrupted or encountered an error. 
                             Your progress has been saved. Click "{getActionText()}" to continue from the last saved chapter.
                         </span>
@@ -1241,21 +1255,21 @@ const App: React.FC = () => {
         </div>
 
         {/* Right Panel: Logs & Progress */}
-        <div className="w-full md:w-1/2 lg:w-7/12 bg-stone-900 text-stone-300 p-0 flex flex-col relative">
-          <div className="p-3 border-b border-stone-800 bg-stone-950 flex items-center justify-between z-10 shadow-sm px-5">
-             <div className="flex gap-2 p-1 bg-stone-900 rounded-lg border border-stone-800">
+        <div className="w-full md:w-1/2 lg:w-7/12 bg-black text-white p-0 flex flex-col relative border-l border-white/10">
+          <div className="p-3 border-b border-white/10 bg-neutral-900 flex items-center justify-between z-10 shadow-none px-5">
+             <div className="flex gap-2 p-1 bg-black rounded-none border border-white/10">
                 <button 
                     onClick={() => setViewMode('logs')}
-                    className={`px-3 py-1.5 rounded-md text-[10px] font-mono tracking-widest uppercase transition-all ${
-                        viewMode === 'logs' ? 'bg-stone-800 text-stone-100 shadow-sm' : 'text-stone-500 hover:text-stone-300'
+                    className={`px-3 py-1.5 rounded-none text-[10px] font-mono tracking-widest uppercase transition-all ${
+                        viewMode === 'logs' ? 'bg-white text-black font-bold' : 'text-neutral-400 hover:text-white'
                     }`}
                 >
                     Console
                 </button>
                 <button 
                     onClick={() => setViewMode('chapters')}
-                    className={`px-3 py-1.5 rounded-md text-[10px] font-mono tracking-widest uppercase transition-all ${
-                        viewMode === 'chapters' ? 'bg-stone-800 text-stone-100 shadow-sm' : 'text-stone-500 hover:text-stone-300'
+                    className={`px-3 py-1.5 rounded-none text-[10px] font-mono tracking-widest uppercase transition-all ${
+                        viewMode === 'chapters' ? 'bg-white text-black font-bold' : 'text-neutral-400 hover:text-white'
                     }`}
                 >
                     Chapters ({chapters.length})
@@ -1263,8 +1277,8 @@ const App: React.FC = () => {
                 {config.enableGlossary && (
                     <button 
                         onClick={() => setViewMode('glossary')}
-                        className={`px-3 py-1.5 rounded-md text-[10px] font-mono tracking-widest uppercase transition-all ${
-                            viewMode === 'glossary' ? 'bg-stone-800 text-stone-100 shadow-sm' : 'text-stone-500 hover:text-stone-300'
+                        className={`px-3 py-1.5 rounded-none text-[10px] font-mono tracking-widest uppercase transition-all ${
+                            viewMode === 'glossary' ? 'bg-white text-black font-bold' : 'text-neutral-400 hover:text-white'
                         }`}
                     >
                         Glossary
@@ -1272,11 +1286,11 @@ const App: React.FC = () => {
                 )}
              </div>
 
-             <div className="text-xs font-mono text-stone-400 bg-stone-800/50 px-3 py-1.5 rounded-full border border-stone-700/50 flex items-center gap-2 min-w-[80px] justify-center">
+             <div className="text-[10px] font-mono text-neutral-400 bg-black px-3 py-1.5 rounded-none border border-white/10 flex items-center gap-2 min-w-[80px] justify-center tracking-widest uppercase">
                 {status !== AppStatus.IDLE && status !== AppStatus.COMPLETED && status !== AppStatus.ERROR && status !== AppStatus.PAUSED ? (
                    <>
-                     <Loader2 className="w-3 h-3 animate-spin text-amber-500" /> 
-                     <span className="text-[10px] uppercase tracking-wider font-bold text-stone-200">
+                     <Loader2 className="w-3 h-3 animate-spin text-white" /> 
+                     <span className="font-bold text-white">
                         {status === AppStatus.PARSING ? 'Parsing' : 
                          status === AppStatus.TRANSLATING ? 'Translating' :
                          
@@ -1284,7 +1298,7 @@ const App: React.FC = () => {
                      </span>
                    </>
                 ) : (
-                    <span className="text-[10px] uppercase tracking-wider opacity-60 font-bold">
+                    <span className="opacity-60 font-bold">
                         {status === AppStatus.IDLE ? 'Ready' : 
                          status === AppStatus.PAUSED ? 'Paused' :
                          status === AppStatus.COMPLETED ? 'Finished' :
@@ -1296,17 +1310,17 @@ const App: React.FC = () => {
           
           <div className="flex-1 overflow-y-auto custom-scrollbar">
             {viewMode === 'logs' ? (
-                <div className="p-8 font-mono text-sm leading-relaxed space-y-4">
+                <div className="p-8 font-mono text-xs leading-relaxed space-y-4 text-neutral-400">
                     {logs.length === 0 && (
-                        <div className="text-stone-600 italic text-center mt-20 font-serif text-xl">
+                        <div className="text-neutral-600 italic text-center mt-20 text-sm">
                             Awaiting manuscript...
                         </div>
                     )}
                     {logs.map((log, idx) => (
                         <div key={idx} className={`flex gap-4 ${
-                            log.type === 'error' ? 'text-red-400' :
-                            log.type === 'success' ? 'text-emerald-400' :
-                            log.type === 'process' ? 'text-amber-200' : 'text-stone-400'
+                            log.type === 'error' ? 'text-white bg-black border border-white/20 p-2' :
+                            log.type === 'success' ? 'text-white font-bold' :
+                            log.type === 'process' ? 'text-neutral-300' : 'text-neutral-500'
                         }`}>
                             <span className="opacity-40 shrink-0 select-none">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
                             <span className="break-words">{log.message}</span>
@@ -1317,7 +1331,7 @@ const App: React.FC = () => {
             ) : viewMode === 'chapters' ? (
                 <div className="p-6 space-y-3">
                     {chapters.length === 0 ? (
-                        <div className="text-stone-600 italic text-center mt-20 font-serif text-xl">
+                        <div className="text-neutral-600 italic text-center mt-20 text-sm font-mono">
                             No chapters extracted yet.
                         </div>
                     ) : (
@@ -1367,48 +1381,48 @@ const App: React.FC = () => {
                                               (hasFallbacks || (config.enableProofreading && hasProofreadFallbacks));
 
                         return (
-                            <div key={chapter.id} className={`group border rounded-xl p-4 transition-all ${
-                                isSkipped ? 'bg-stone-950/20 border-stone-800/50 opacity-50' :
-                                isPartiallyDone ? 'bg-amber-500/5 border-amber-600/40 hover:border-amber-500/60 shadow-[inset_0_0_15px_-5px_rgba(245,158,11,0.2)]' :
-                                isDone ? 'bg-stone-850/40 border-stone-800 hover:border-emerald-900/40' :
-                                'bg-stone-900 border-stone-800 hover:border-amber-900/40'
+                            <div key={chapter.id} className={`group border rounded-none p-4 transition-all ${
+                                isSkipped ? 'bg-black border-white/10 opacity-50' :
+                                isPartiallyDone ? 'bg-neutral-800 border-white/30 hover:border-white/50' :
+                                isDone ? 'bg-neutral-900/50 border-white/20 hover:border-white/40' :
+                                'bg-neutral-900 border-white/10 hover:border-white/30'
                             }`}>
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-4">
                                         <span className="text-[10px] font-mono opacity-30 w-6">{idx + 1}</span>
                                         <div className="flex flex-col">
                                             <div className="flex items-center gap-2">
-                                                <span className={`font-medium transition-colors ${
-                                                    isSkipped ? 'text-stone-600' :
-                                                    isPartiallyDone ? 'text-amber-500 font-bold' :
-                                                    isDone ? 'text-emerald-400/90' : 'text-stone-200'
+                                                <span className={`font-mono transition-colors text-sm ${
+                                                    isSkipped ? 'text-neutral-600' :
+                                                    isPartiallyDone ? 'text-white font-bold underline' :
+                                                    isDone ? 'text-white font-bold' : 'text-neutral-300'
                                                 }`}>
                                                     {chapter.title || 'Untitled Chapter'}
                                                 </span>
                                                 {isPartiallyDone && (
-                                                    <div className="flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
-                                                        <AlertTriangle className="w-3 h-3 text-amber-500" />
-                                                        <span className="text-[9px] text-amber-500 uppercase font-bold tracking-tighter">Issue Detected</span>
+                                                    <div className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-none bg-black border border-white/30">
+                                                        <AlertTriangle className="w-3 h-3 text-white" />
+                                                        <span className="text-[9px] text-white uppercase font-bold tracking-tighter">Issue Detected</span>
                                                     </div>
                                                 )}
                                             </div>
                                             <div className="flex gap-2 mt-1.5 item-center">
                                                 {isSkipped ? (
-                                                     <span className="text-[9px] uppercase tracking-tighter text-stone-700 bg-stone-950 px-1.5 py-0.5 rounded">Removed</span>
+                                                     <span className="text-[9px] font-mono uppercase tracking-widest text-neutral-600 bg-black px-1.5 py-0.5 rounded-none border border-white/10">Removed</span>
                                                 ) : (
                                                     <>
-                                                        <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 rounded flex items-center gap-1 ${
+                                                        <span className={`text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded-none border flex items-center gap-1 ${
                                                             chapter.translatedMarkdown 
-                                                                ? (detectedFallbacks.length > 0 ? 'bg-amber-950 text-amber-500 font-bold border border-amber-900/50' : 'bg-emerald-950/40 text-emerald-500') 
-                                                                : 'bg-stone-950 text-stone-600'
+                                                                ? (detectedFallbacks.length > 0 ? 'bg-black text-white font-bold border-white' : 'bg-white text-black border-white') 
+                                                                : 'bg-black text-neutral-500 border-white/20'
                                                         }`}>
                                                             Translate {detectedFallbacks.length > 0 && `(${detectedFallbacks.length} Fallback)`}
                                                         </span>
                                                         {config.enableProofreading && (
-                                                            <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 rounded flex items-center gap-1 ${
+                                                            <span className={`text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded-none border flex items-center gap-1 ${
                                                                 chapter.proofreadMarkdown 
-                                                                    ? (detectedProofreadFallbacks.length > 0 ? 'bg-amber-950 text-amber-500 font-bold border border-amber-900/50' : 'bg-emerald-950/40 text-emerald-500')
-                                                                    : 'bg-stone-950 text-stone-600'
+                                                                    ? (detectedProofreadFallbacks.length > 0 ? 'bg-black text-white font-bold border-white' : 'bg-white text-black border-white')
+                                                                    : 'bg-black text-neutral-500 border-white/20'
                                                             }`}>
                                                                 Proofread {detectedProofreadFallbacks.length > 0 && `(${detectedProofreadFallbacks.length} Fallback)`}
                                                             </span>
@@ -1424,21 +1438,21 @@ const App: React.FC = () => {
                                             <div className="flex gap-1 mr-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                 <button 
                                                     onClick={() => setPreviewChapter(chapter)}
-                                                    className="p-1.5 rounded-lg bg-stone-800 text-stone-400 hover:text-stone-100 hover:bg-stone-700 transition-all"
+                                                    className="p-1.5 rounded-none border border-white/20 bg-black text-neutral-400 hover:text-white hover:bg-neutral-800 transition-all"
                                                     title="Preview Content"
                                                 >
                                                     <Eye className="w-3.5 h-3.5" />
                                                 </button>
                                                 <button 
                                                     onClick={() => toggleChapterReference(idx)}
-                                                    className={`p-1.5 rounded-lg transition-all ${chapter.isReference ? 'bg-amber-600 text-stone-950' : 'bg-stone-800 text-stone-400 hover:text-stone-100 hover:bg-stone-700'}`}
+                                                    className={`p-1.5 rounded-none border border-white/20 transition-all ${chapter.isReference ? 'bg-white text-black' : 'bg-black text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
                                                     title={chapter.isReference ? "Enable Translation" : "Keep Original (No Translation)"}
                                                 >
                                                     <FileCode className="w-3.5 h-3.5" />
                                                 </button>
                                                 <button 
                                                     onClick={() => toggleChapterSkip(idx)}
-                                                    className="p-1.5 rounded-lg bg-stone-800 text-stone-400 hover:text-red-400 hover:bg-red-950/30 transition-all"
+                                                    className="p-1.5 rounded-none border border-white/20 bg-black text-neutral-400 hover:text-white hover:bg-neutral-800 transition-all"
                                                     title="Skip / Remove Chapter"
                                                 >
                                                     <Ban className="w-3.5 h-3.5" />
@@ -1448,7 +1462,7 @@ const App: React.FC = () => {
                                         {isSkipped && (
                                             <button 
                                                 onClick={() => toggleChapterSkip(idx)}
-                                                className="mr-3 p-1.5 rounded-lg bg-stone-800 text-stone-400 hover:text-emerald-400 hover:bg-emerald-950/30 transition-all"
+                                                className="mr-3 p-1.5 rounded-none border border-white/20 bg-black text-neutral-400 hover:text-white hover:bg-neutral-800 transition-all"
                                                 title="Include Chapter"
                                             >
                                                 <RefreshCw className="w-3.5 h-3.5" />
@@ -1469,10 +1483,10 @@ const App: React.FC = () => {
                                                             handleRetryChapter(idx);
                                                         }}
                                                         disabled={status !== AppStatus.IDLE && status !== AppStatus.ERROR && status !== AppStatus.COMPLETED}
-                                                        className={`text-[10px] px-2.5 py-1 rounded border transition-all flex items-center gap-1.5 disabled:opacity-50 shadow-sm ${
+                                                        className={`text-[10px] px-2.5 py-1 rounded-none border transition-all flex items-center gap-1.5 disabled:opacity-50 shadow-none font-mono tracking-widest uppercase ${
                                                             hasFallbacks 
-                                                                ? 'bg-amber-600 hover:bg-amber-500 text-stone-950 border-amber-400 font-bold animate-pulse' 
-                                                                : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border-stone-700 opacity-0 group-hover:opacity-100'
+                                                                ? 'bg-white hover:bg-neutral-200 text-black border-white font-bold' 
+                                                                : 'bg-black hover:bg-neutral-900 text-white border-white/20 opacity-0 group-hover:opacity-100'
                                                         }`}
                                                     >
                                                         <RefreshCw className="w-3 h-3" /> {hasFallbacks ? `Retry ${detectedFallbacks.length} Chunks` : 'Re-Translate'}
@@ -1504,8 +1518,8 @@ const App: React.FC = () => {
                 <div className="p-8 h-full flex flex-col">
                     <div className="flex items-center justify-between mb-4">
                         <div className="flex flex-col">
-                            <h2 className="text-stone-100 font-serif text-xl">Cumulative Glossary</h2>
-                            <p className="text-[10px] text-stone-500 font-mono mt-1 uppercase tracking-tight">
+                            <h2 className="text-white font-mono text-xl uppercase tracking-widest font-bold">Cumulative Glossary</h2>
+                            <p className="text-[10px] text-neutral-500 font-mono mt-1 uppercase tracking-tight">
                                 {isBulkEdit ? 'Bulk Edit Mode' : 'Table View Mode'}
                             </p>
                         </div>
@@ -1513,10 +1527,10 @@ const App: React.FC = () => {
                              <button 
                                 onClick={() => optimizeGlossary(true)}
                                 disabled={isCleaningGlossary || isWorking}
-                                className={`text-[10px] px-3 py-1.5 rounded-md flex items-center gap-2 border transition-all ${
+                                className={`text-[10px] px-3 py-1.5 rounded-none flex items-center gap-2 border transition-all font-mono tracking-widest uppercase ${
                                     isCleaningGlossary 
-                                        ? 'bg-amber-950 text-amber-500 border-amber-900/50' 
-                                        : 'text-amber-500/80 hover:text-amber-400 border-amber-900/30'
+                                        ? 'bg-white text-black border-white' 
+                                        : 'text-neutral-400 hover:text-white border-white/20 hover:border-white/50'
                                 } disabled:opacity-50`}
                                 title="Use AI to remove noise and redundancies"
                             >
@@ -1525,46 +1539,46 @@ const App: React.FC = () => {
                             </button>
                              <button 
                                 onClick={() => setIsBulkEdit(!isBulkEdit)}
-                                className="text-[10px] px-3 py-1.5 rounded-md text-stone-400 hover:text-stone-100 border border-stone-800 transition-all"
+                                className="text-[10px] px-3 py-1.5 rounded-none font-mono tracking-widest uppercase text-neutral-400 hover:text-white border border-white/20 hover:border-white/50 transition-all"
                             >
                                 {isBulkEdit ? 'Switch to Table' : 'Switch to Text'}
                             </button>
                              <button 
                                 onClick={() => isBulkEdit ? handleUpdateGlossary(liveGlossary) : handleSaveGlossaryMap()}
-                                className="text-[10px] px-3 py-1.5 rounded-md bg-stone-100 hover:bg-white text-stone-950 font-bold uppercase tracking-widest transition-all shadow-sm flex items-center gap-2"
+                                className="text-[10px] px-3 py-1.5 rounded-none bg-white hover:bg-neutral-200 text-black font-bold font-mono uppercase tracking-widest transition-all shadow-none flex items-center gap-2 border border-white"
                             >
                                 <Save className="w-3 h-3" /> Save Changes
                             </button>
                         </div>
                     </div>
                     
-                    <div className="flex-1 overflow-hidden flex flex-col bg-stone-950/50 border border-stone-800 rounded-xl relative group shadow-inner">
+                    <div className="flex-1 overflow-hidden flex flex-col bg-black border border-white/10 rounded-none relative group shadow-none">
                         {isBulkEdit ? (
                             <textarea 
                                 value={liveGlossary}
                                 onChange={(e) => setLiveGlossary(e.target.value)}
                                 placeholder="No terms extracted yet..."
-                                className="w-full h-full p-6 font-mono text-sm text-stone-300 outline-none transition-colors resize-none bg-transparent custom-scrollbar"
+                                className="w-full h-full p-6 font-mono text-sm text-neutral-300 outline-none transition-colors resize-none bg-transparent custom-scrollbar"
                             />
                         ) : (
                             <div className="flex-1 overflow-x-hidden overflow-y-auto custom-scrollbar p-2">
                                 <table className="w-full text-left border-collapse">
                                     <thead>
-                                        <tr className="border-b border-stone-800/50">
-                                            <th className="p-3 text-[10px] uppercase tracking-widest text-stone-500 font-mono font-medium">Source</th>
-                                            <th className="p-3 text-[10px] uppercase tracking-widest text-stone-500 font-mono font-medium">Translation</th>
+                                        <tr className="border-b border-white/10">
+                                            <th className="p-3 text-[10px] uppercase tracking-widest text-neutral-500 font-mono font-bold">Source</th>
+                                            <th className="p-3 text-[10px] uppercase tracking-widest text-neutral-500 font-mono font-bold">Translation</th>
                                             <th className="p-3 w-10"></th>
                                         </tr>
                                     </thead>
-                                    <tbody className="divide-y divide-stone-900">
+                                    <tbody className="divide-y divide-white/10">
                                         {Object.entries(glossaryMap).sort().map(([key, value], idx) => (
-                                            <tr key={idx} className="group/row hover:bg-stone-900/40 transition-colors">
+                                            <tr key={idx} className="group/row hover:bg-neutral-900 transition-colors">
                                                 <td className="p-1">
                                                     <input 
                                                         type="text" 
                                                         value={key}
                                                         onChange={(e) => handleUpdateTerm(key, e.target.value, value as string)}
-                                                        className="w-full bg-transparent p-2 text-stone-200 outline-none focus:bg-stone-800/30 rounded transition-colors font-mono text-sm"
+                                                        className="w-full bg-transparent p-2 text-white outline-none focus:bg-neutral-800 rounded-none transition-colors font-mono text-sm"
                                                     />
                                                 </td>
                                                 <td className="p-1">
@@ -1572,13 +1586,13 @@ const App: React.FC = () => {
                                                         type="text" 
                                                         value={value}
                                                         onChange={(e) => handleUpdateTerm(key, key, e.target.value)}
-                                                        className="w-full bg-transparent p-2 text-stone-400 focus:text-stone-100 outline-none focus:bg-stone-800/30 rounded transition-colors font-mono text-sm"
+                                                        className="w-full bg-transparent p-2 text-neutral-400 focus:text-white outline-none focus:bg-neutral-800 rounded-none transition-colors font-mono text-sm"
                                                     />
                                                 </td>
                                                 <td className="p-1">
                                                     <button 
                                                         onClick={() => handleDeleteTerm(key)}
-                                                        className="p-1.5 text-stone-600 hover:text-red-400 transition-colors rounded hover:bg-red-400/10 opacity-0 group-hover/row:opacity-100"
+                                                        className="p-1.5 text-neutral-500 hover:text-white transition-colors rounded-none hover:bg-neutral-800 opacity-0 group-hover/row:opacity-100 border border-transparent hover:border-white/20"
                                                     >
                                                         <X className="w-3.5 h-3.5" />
                                                     </button>
@@ -1587,17 +1601,17 @@ const App: React.FC = () => {
                                         ))}
                                         {Object.keys(glossaryMap).length === 0 && (
                                             <tr>
-                                                <td colSpan={3} className="p-8 text-center text-stone-600 italic font-serif text-lg">
+                                                <td colSpan={3} className="p-8 text-center text-neutral-600 italic font-mono text-sm">
                                                     No terms extracted yet...
                                                 </td>
                                             </tr>
                                         )}
                                     </tbody>
                                 </table>
-                                <div className="p-3 border-t border-stone-800/50 mt-1">
+                                <div className="p-3 border-t border-white/10 mt-1">
                                     <button 
                                         onClick={handleAddTerm}
-                                        className="flex items-center gap-2 text-[10px] font-mono text-stone-500 hover:text-stone-300 transition-colors uppercase tracking-widest py-1"
+                                        className="flex items-center gap-2 text-[10px] font-mono text-neutral-500 hover:text-white transition-colors uppercase tracking-widest py-1"
                                     >
                                         <Plus className="w-3 h-3" /> Add Term
                                     </button>
@@ -1605,11 +1619,11 @@ const App: React.FC = () => {
                             </div>
                         )}
                     </div>
-                    <div className="mt-4 p-4 rounded-lg bg-stone-900/50 border border-stone-800 flex items-start gap-3">
-                        <div className="w-5 h-5 rounded-full bg-stone-100/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <Info className="w-3 h-3 text-stone-300" />
+                    <div className="mt-4 p-4 rounded-none bg-neutral-900 border border-white/10 flex items-start gap-3">
+                        <div className="w-5 h-5 rounded-none bg-black border border-white/20 flex items-center justify-center shrink-0 mt-0.5">
+                            <Info className="w-3 h-3 text-neutral-400" />
                         </div>
-                        <p className="text-[11px] text-stone-400 leading-relaxed italic">
+                        <p className="text-[10px] text-neutral-400 leading-relaxed font-mono uppercase tracking-widest">
                             Modifying this table directly updates the database. The AI will only contribute <strong>New Terms</strong> while maintaining consistency with these definitions.
                         </p>
                     </div>
@@ -1618,9 +1632,9 @@ const App: React.FC = () => {
           </div>
 
           {/* Progress Bar (Visual) */}
-          <div className="h-1.5 bg-stone-900 w-full absolute bottom-0 left-0">
+          <div className="h-1 bg-black w-full absolute bottom-0 left-0">
             <div 
-                className={`h-full transition-all duration-500 ease-out ${status === AppStatus.ERROR ? 'bg-red-500' : 'bg-amber-500'}`}
+                className={`h-full transition-all duration-500 ease-out ${status === AppStatus.ERROR ? 'bg-white/50' : 'bg-white'}`}
                 style={{ width: `${Math.min(100, progress)}%` }}
             />
           </div>
@@ -1630,23 +1644,23 @@ const App: React.FC = () => {
 
       {/* Preview Modal */}
       {previewChapter && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-10 bg-stone-950/80 backdrop-blur-sm animate-in fade-in duration-200">
-              <div className="bg-[#f5f5f0] w-full max-w-4xl h-[90vh] flex flex-col rounded-3xl shadow-2xl overflow-hidden border border-stone-200 animate-in zoom-in-95 duration-200">
-                  <div className="bg-stone-900 px-6 py-4 flex items-center justify-between border-b border-stone-800">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-10 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+              <div className="bg-white w-full max-w-4xl h-[90vh] flex flex-col rounded-none shadow-none overflow-hidden border border-black animate-in zoom-in-95 duration-200">
+                  <div className="bg-black px-6 py-4 flex items-center justify-between border-b border-black">
                       <div className="flex items-center gap-3">
-                        <Info className="w-5 h-5 text-amber-400" />
-                        <h2 className="text-xl font-serif font-medium text-stone-100">Chapter Preview</h2>
+                        <Info className="w-5 h-5 text-white" />
+                        <h2 className="text-xl font-mono uppercase tracking-widest font-bold text-white">Chapter Preview</h2>
                       </div>
                       <button 
                         onClick={() => setPreviewChapter(null)}
-                        className="p-2 hover:bg-stone-800 rounded-full transition-colors text-stone-400 hover:text-stone-100"
+                        className="p-2 hover:bg-neutral-800 rounded-none transition-colors text-neutral-400 hover:text-white border border-transparent hover:border-white/20"
                       >
                           <X className="w-6 h-6" />
                       </button>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-8 md:p-12 font-serif text-stone-800 leading-relaxed bg-white">
+                  <div className="flex-1 overflow-y-auto p-8 md:p-12 font-sans text-black leading-relaxed bg-white">
                       <div className="max-w-2xl mx-auto">
-                        <h1 className="text-3xl font-medium text-stone-900 mb-8 pb-4 border-b border-stone-100">
+                        <h1 className="text-3xl font-bold text-black mb-8 pb-4 border-b border-black font-sans">
                             {previewChapter.title}
                         </h1>
                         <div className="markdown-body prose prose-stone prose-lg max-w-none">
@@ -1667,7 +1681,7 @@ const App: React.FC = () => {
                         </div>
                       </div>
                   </div>
-                  <div className="bg-stone-50 px-6 py-4 flex items-center justify-center border-t border-stone-100 italic text-stone-400 text-xs font-serif">
+                  <div className="bg-white px-6 py-4 flex items-center justify-center border-t border-black text-black font-mono text-[10px] uppercase tracking-widest font-bold">
                       This is the source content extracted from the EPUB.
                   </div>
               </div>
