@@ -2,14 +2,24 @@
 
 [![Vite](https://img.shields.io/badge/Vite-6.x-646CFF.svg?style=flat-square&logo=vite)](https://vite.dev/)
 [![React](https://img.shields.io/badge/React-19.x-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
-[![TailwindCSS](https://img.shields.io/badge/CSS-Vanilla-blue.svg?style=flat-square)](https://developer.mozilla.org/en-US/docs/Web/CSS)
+[![CSS](https://img.shields.io/badge/CSS-Vanilla-blue.svg?style=flat-square)](https://developer.mozilla.org/en-US/docs/Web/CSS)
 [![License](https://img.shields.io/badge/License-MIT-black.svg?style=flat-square)](LICENSE)
 
-**TransLit** 是一款完全基于纯前端实现的 **EPUB 电子书 AI 翻译与术语优化工具**。它支持直接在浏览器中解析、翻译、校对和重新打包 EPUB 电子书，支持 BYOK (Bring Your Own Key) 直连模式，全程无需任何中转后端服务，100% 保护您的书籍隐私。
+* [中文版](#中文说明) | [English Version](#english-description)
+
+---
+
+# 中文说明
+
+**TransLit** 是一款完全基于纯前端实现的、**专门用于将 EPUB 电子书翻译成中文的 AI 翻译与术语优化工具**。它支持直接在浏览器中解析、翻译、校对和重新打包 EPUB 电子书，支持 BYOK (Bring Your Own Key) 直连模式，全程无需任何中转后端服务，100% 保护您的书籍隐私。
 
 应用界面采用了独树一帜的 **Swiss Monochrome (极致黑白 e-ink 极简风)** 设计语言，旨在为文学翻译创作者提供专注、沉浸、纯粹的交互体验。
 
----
+## ✍️ 博客与设计思想
+
+关于 TransLit 的开发思考与 AI 翻译演进记录，欢迎阅读作者的相关博客：
+- 📑 [TransLit：AI 翻译电子书之我见](https://joffoo.pages.dev/2026/05/02/translit-ai-translation-ebook/)
+- 📑 [TransLit：AI 翻译，多人一步](https://joffoo.pages.dev/2026/05/10/translit-evolution-two-step/)
 
 ## ✨ 核心特性
 
@@ -24,21 +34,17 @@
   - 即使网络意外中断、电脑死机或页面误刷新，也能随时断点恢复，继续之前的翻译进度。
 - 🤖 **智能双 Pass 翻译与校对**
   - **分包处理**：自动按约 3000 字（大小可灵活调节）进行智能拆包。
-  - **双 Pass 润色**：除常规单 Pass 翻译外，支持开启 “Proofreading (校对与润色)” 双阶段流式处理。结合您输入的额外翻译上下文，产出信达雅的译文。
+  - **双 Pass 润色**：除常规单 Pass 翻译外，支持开启 “Proofreading (校对与润色)” 双阶段流式处理。结合您输入的额外翻译上下文，产出信达雅的中文译文。
 - 🗂️ **智能术语库与自动清理 (Smart Glossary Cleanup)**
   - 自动抽取、记录章节中的生僻词与专有名词。
   - 支持按需翻译，同时结合上下文对未来文本进行词频和重要度匹配，动态过滤冗余术语，保证术语库的紧凑与精准。
-
----
 
 ## 🎨 设计美学：Swiss Monochrome
 
 项目整体界面致敬了经典的瑞士现代主义排版与 e-ink 电子墨水屏美学：
 - **极致留白与黑白对比**：使用粗体无衬线等宽字体（Geist Mono）与清晰的网格线条。
 - **纯粹的二进制交互**：抛弃了任何色彩发光、软阴影与圆角。所有输入框、开关按钮、标签和控制台均由黑白两色高对比度直接呈现。
-- **无感无边框 Logo**：左上角使用精细裁剪的黑白软盘剪影 SVG 矢量 Logo，与页面自然融合。
-
----
+- **无感无边框 Logo**：左上角使用从 `logo.png` 自动提取并高精度裁剪的黑白软盘剪影 SVG 矢量 Logo，与页面自然融合。
 
 ## 🛠️ 本地运行指南
 
@@ -66,8 +72,6 @@ npm run dev
 ### 🚀 Windows 专属一键启动
 双击项目根目录下的 `启动翻译应用TransLit.bat`（或桌面上的快捷方式），会自动为您配置 Node 环境并直接拉起服务、打开浏览器进入翻译界面。
 
----
-
 ## 📦 项目架构简析
 
 ```
@@ -87,6 +91,71 @@ TransLit/
 
 ---
 
-## 📜 许可证
+# English Description
 
-本项目遵循 [MIT License](LICENSE) 许可协议。
+**TransLit** is a fully client-side **EPUB AI translation and glossary optimization tool, dedicated to translating books into Chinese**. It supports parsing, translating, proofreading, and packaging EPUB e-books directly inside the browser. By adopting the BYOK (Bring Your Own Key) model, it communicates directly with AI APIs without any intermediate back-end servers, ensuring 100% privacy for your books.
+
+The user interface implements a unique **Swiss Monochrome (e-ink minimalist style)** design language, providing literary translators with a focused, immersive, and pure interactive workspace.
+
+## ✍️ Blogs & Design Philosophy
+
+For the author's thoughts on TransLit's development and the evolution of AI translation, check out the following blog posts (in Chinese):
+- 📑 [TransLit: My Take on AI Translation of E-books](https://joffoo.pages.dev/2026/05/02/translit-ai-translation-ebook/)
+- 📑 [TransLit: AI Translation, One Step Ahead](https://joffoo.pages.dev/2026/05/10/translit-evolution-two-step/)
+
+## ✨ Key Features
+
+- 🔌 **BYOK (Bring Your Own Key) Mode**
+  - No server-side setup required; API calls are sent directly from the browser.
+  - User settings (API Key, Base URL, etc.) are cached in the browser's `localStorage` in real-time. Resetting the translation progress **will not clear** your personal API keys.
+- 📖 **EPUB Parsing & Re-packaging**
+  - Unzips and parses EPUB using the `jszip` library to extract XHTML chapters and metadata.
+  - Converts XHTML to Markdown using `turndown` before sending it to LLMs, ensuring formatting (bold, links, lists, notes) is fully preserved in the translated Chinese output.
+- 💾 **Robust Persistence (Resumable Progress)**
+  - Stores session states, chapter extractions, images, logs, and generated glossary terms in the browser's `IndexedDB`.
+  - Resumes translation progress seamlessly even after network disconnections, browser crashes, or page reloads.
+- 🤖 **Smart Two-Pass Translation & Proofreading**
+  - **Chunk Splitter**: Automatically splits chapters into chunks of ~3000 words.
+  - **Two-Pass Polish**: Supports an optional "Proofreading" stage following the initial translation pass. Combines user-specified context to deliver natural, polished Chinese translations.
+- 🗂️ **Glossary Management & Smart Cleanup**
+  - Automatically extracts and logs rare words and proper nouns during translation.
+  - Evaluates terms against future text, dynamically filtering out redundant glossary records to keep the database clean and efficient.
+
+## 🎨 Design Philosophy: Swiss Monochrome
+
+The interface pays tribute to Swiss typography and e-ink aesthetics:
+- **High Contrast Grid Layout**: Uses bold monospace typography (Geist Mono) and sharp border lines.
+- **Pure Binary Interaction**: Rejects glows, soft shadows, and rounded borders (`rounded-none`). All inputs, switches, badges, and consoles are rendered in pure black and white.
+- **Borderless Logo**: Incorporates a vectorized, borderless floppy disk SVG logo (automatically processed from `logo.png` to crop empty space), blending seamlessly into the header.
+
+## 🛠️ Local Setup Guide
+
+### Prerequisites
+- [Node.js](https://nodejs.org/) (v18+ recommended) installed locally.
+
+### 1. Install Dependencies
+```bash
+npm install
+```
+
+### 2. Set Up Environment Variables (Optional)
+You can create a `.env.local` file in the root directory to auto-fill your default API key:
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+*Note: Keys entered in the Web UI have higher priority and are stored in LocalStorage.*
+
+### 3. Run Development Server
+```bash
+npm run dev
+```
+Open the local URL (default: `http://localhost:3000`) shown in your terminal.
+
+### 🚀 One-Click Launch on Windows
+Double-click `启动翻译应用TransLit.bat` in the root folder to auto-configure the Node environment and launch the app in your default browser.
+
+---
+
+## 📜 License
+
+This project is licensed under the [MIT License](LICENSE).
