@@ -139,6 +139,29 @@ const glossaryToOutputStr = (glossary: Record<string, string>): string => {
     .join('\n');
 }
 
+const LogoWatermark: React.FC = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="280" height="280" viewBox="80 80 502 502" fill="none" className="text-white opacity-[0.15] pointer-events-none select-none">
+    {/* 卡片主体 */}
+    <path d="M 116,84 L 216,84 A 16,16 0 0,1 232,100 L 232,206 A 16,16 0 0,0 248,222 L 390,222 A 16,16 0 0,0 406,206 L 406,100 A 16,16 0 0,1 422,84 L 478,84 L 578,184 L 578,546 A 32,32 0 0,1 546,578 L 116,578 A 32,32 0 0,1 84,546 L 84,116 A 32,32 0 0,1 116,84 Z" fill="currentColor" />
+    {/* 折角 */}
+    <path d="M 478,84 L 478,168 A 16,16 0 0,0 494,184 L 578,184 Z" fill="currentColor" opacity="0.7" />
+    {/* 悬挂夹 */}
+    <path d="M 260,84 L 260,116 A 12,12 0 0,0 272,128 L 366,128 A 12,12 0 0,0 378,116 L 378,84 Z" fill="currentColor" opacity="0.5" />
+    {/* 书本底座 */}
+    <path d="M 190,444 C 230,460 274,474 331,488 C 388,474 432,460 472,444 L 472,282 C 432,298 388,306 331,315 C 274,306 230,298 190,282 Z" fill="black" opacity="0.6" />
+    {/* 书脊 */}
+    <path d="M 331,315 L 331,488" stroke="black" strokeWidth="4" strokeLinecap="round" opacity="0.3" />
+    {/* 左侧翻页 */}
+    <path d="M 205,435 C 238,448 276,458 314,464 L 314,324 C 276,318 238,308 205,295 Z" fill="currentColor" opacity="0.35" />
+    <path d="M 216,444 C 247,456 280,465 314,470 L 314,332 C 280,327 247,318 216,306 Z" fill="currentColor" opacity="0.6" />
+    <path d="M 227,453 C 256,464 285,471 314,476 L 314,340 C 285,335 256,328 227,317 Z" fill="currentColor" opacity="0.85" />
+    {/* 右侧翻页 */}
+    <path d="M 457,435 C 424,448 386,458 348,464 L 348,324 C 386,318 424,308 457,295 Z" fill="currentColor" opacity="0.35" />
+    <path d="M 446,444 C 415,456 382,465 348,470 L 348,332 C 382,327 415,318 446,306 Z" fill="currentColor" opacity="0.6" />
+    <path d="M 435,453 C 406,464 377,471 348,476 L 348,340 C 377,335 406,328 435,317 Z" fill="currentColor" opacity="0.85" />
+  </svg>
+);
+
 const App: React.FC = () => {
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
@@ -1098,7 +1121,7 @@ const App: React.FC = () => {
       {/* Header */}
       <header className="bg-white border-b border-black px-8 py-5 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-4">
-          <img src={logoUrl} alt="TransLit Logo" className="w-8 h-8 object-contain" />
+          <img src={logoUrl} alt="TransLit Logo" className="w-9 h-9 object-contain" />
           <div>
             <h1 className="text-2xl font-mono font-bold text-black tracking-widest uppercase">TransLit</h1>
             <p className="text-[10px] font-mono font-bold text-neutral-500 uppercase tracking-widest mt-0.5">Literary Translation Engine</p>
@@ -1308,14 +1331,17 @@ const App: React.FC = () => {
              </div>
           </div>
           
-          <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col">
             {viewMode === 'logs' ? (
-                <div className="p-8 font-mono text-xs leading-relaxed space-y-4 text-neutral-400">
-                    {logs.length === 0 && (
-                        <div className="text-neutral-600 italic text-center mt-20 text-sm">
-                            Awaiting manuscript...
+                logs.length === 0 ? (
+                    <div className="flex-1 relative">
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                            <LogoWatermark />
+                            <p className="text-neutral-600 italic text-sm font-serif mt-4">Awaiting manuscript...</p>
                         </div>
-                    )}
+                    </div>
+                ) : (
+                <div className="p-8 font-mono text-xs leading-relaxed space-y-4 text-neutral-400">
                     {logs.map((log, idx) => (
                         <div key={idx} className={`flex gap-4 ${
                             log.type === 'error' ? 'text-white bg-black border border-white/20 p-2' :
@@ -1328,13 +1354,18 @@ const App: React.FC = () => {
                     ))}
                     <div ref={logsEndRef} className="h-6" />
                 </div>
+                )
             ) : viewMode === 'chapters' ? (
-                <div className="p-6 space-y-3">
-                    {chapters.length === 0 ? (
-                        <div className="text-neutral-600 italic text-center mt-20 text-sm font-mono">
-                            No chapters extracted yet.
+                chapters.length === 0 ? (
+                    <div className="flex-1 relative">
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                            <LogoWatermark />
+                            <p className="text-neutral-600 italic text-sm font-mono mt-4">No chapters extracted yet.</p>
                         </div>
-                    ) : (
+                    </div>
+                ) : (
+                <div className="p-6 space-y-3">
+                    {
                         chapters.map((chapter, idx) => {
                             const ai = new AiService(config);
                             const sourceChunks = ai.splitTextIntoChunks(chapter.markdown || '');
@@ -1512,8 +1543,9 @@ const App: React.FC = () => {
                             </div>
                         );
                     })
-                    )}
+                    }
                 </div>
+                )
             ) : (
                 <div className="p-8 h-full flex flex-col">
                     <div className="flex items-center justify-between mb-4">

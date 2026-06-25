@@ -69,9 +69,6 @@ npm run dev
 ```
 启动后在浏览器打开终端提示的地址（默认 `http://localhost:3000`）即可。
 
-### 🚀 Windows 专属一键启动
-双击项目根目录下的 `启动翻译应用TransLit.bat`（或桌面上的快捷方式），会自动为您配置 Node 环境并直接拉起服务、打开浏览器进入翻译界面。
-
 ## 📦 项目架构简析
 
 ```
@@ -150,9 +147,6 @@ GEMINI_API_KEY=your_gemini_api_key_here
 npm run dev
 ```
 Open the local URL (default: `http://localhost:3000`) shown in your terminal.
-
-### 🚀 One-Click Launch on Windows
-Double-click `启动翻译应用TransLit.bat` in the root folder to auto-configure the Node environment and launch the app in your default browser.
 
 ---
 

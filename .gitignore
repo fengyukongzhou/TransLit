@@ -46,3 +46,7 @@ ehthumbs.db
 
 # Local agents configuration
 .agents/
+
+# Design demos
+design-demos/
+
