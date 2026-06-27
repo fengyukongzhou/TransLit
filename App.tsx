@@ -466,7 +466,11 @@ const App: React.FC = () => {
   ): Promise<string> => {
     const chapter = chapters[index];
     let updated = false;
-    let currentGlossary = startGlossary || chapter.glossary || "";
+    let currentGlossary = startGlossary;
+    if (!currentGlossary) {
+        const freshMap = await persistenceService.current.loadGlossary();
+        currentGlossary = glossaryToOutputStr(freshMap);
+    }
     
     // Skip empty chapters usually
     if (!chapter.markdown || chapter.markdown.trim().length < 10) {
@@ -598,7 +602,11 @@ const App: React.FC = () => {
           chapters.slice(index + 1).map(c => c.markdown).join('\n')
         );
         chapter.translatedMarkdown = result.content;
-        chapter.glossary = result.glossary;
+        // Filter the cumulative glossary to only show terms actually present in this chapter
+        const fullMap = parseGlossaryStr(result.glossary);
+        const filteredMap = aiService.filterGlossaryByInclusion(fullMap, chapter.markdown, 1);
+        chapter.glossary = glossaryToOutputStr(filteredMap);
+        
         currentGlossary = result.glossary;
         
         // If in combined mode, we treat the translation result as the proofread result too
