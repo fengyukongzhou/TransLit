@@ -11,6 +11,7 @@ import {
     FMT_TWO_STEP_NO_GLOSSARY,
     FMT_ONE_STEP_NO_GLOSSARY
 } from "../prompts";
+import { parseGlossaryStr, glossaryToOutputStr } from "../utils/glossaryUtils";
 
 export class AiService {
   // Safe chunk size to avoid context limits (approx 3000 chars)
@@ -255,46 +256,11 @@ export class AiService {
       }
   }
 
-  private parseGlossary(text: string): Record<string, string> {
-    const glossaryMap: Record<string, string> = {};
-    const lines = text.split('\n');
-    lines.forEach(line => {
-      // 1. Try structural format: SOURCE: xxx | TARGET: yyy
-      const structuralMatch = line.match(/SOURCE:\s*(.*?)\s*\|\s*TARGET:\s*(.*)/i);
-      if (structuralMatch) {
-          const key = structuralMatch[1].trim();
-          const value = structuralMatch[2].trim();
-          if (key && value) {
-              glossaryMap[key] = value;
-              return;
-          }
-      }
-
-      // 2. Fallback to simple format: Key: Value
-      const parts = line.split(':');
-      if (parts.length >= 2) {
-          const k = parts[0].trim();
-          const v = parts.slice(1).join(':').trim();
-          if (k && v && !k.toLowerCase().includes('source') && !k.toLowerCase().includes('target')) {
-              glossaryMap[k] = v;
-          }
-      }
-    });
-    return glossaryMap;
-  }
-
-  private glossaryMapToString(map: Record<string, string>): string {
-    return Object.entries(map)
-      .sort()
-      .map(([k, v]) => `SOURCE: ${k} | TARGET: ${v}`)
-      .join('\n');
-  }
-
   private mergeGlossary(base: string, delta: string): string {
-    const baseMap = this.parseGlossary(base);
-    const deltaMap = this.parseGlossary(delta);
+    const baseMap = parseGlossaryStr(base);
+    const deltaMap = parseGlossaryStr(delta);
     const merged = { ...baseMap, ...deltaMap };
-    return this.glossaryMapToString(merged);
+    return glossaryToOutputStr(merged);
   }
 
   /**
@@ -349,7 +315,7 @@ export class AiService {
     console.log(`[Smart Cleanup] Starting two-step cleanup (Threshold: 2+ occurrences in future text)...`);
     
     // Step 1: Automatic Filter
-    const initialMap = this.parseGlossary(glossaryText);
+    const initialMap = parseGlossaryStr(glossaryText);
     const initialCount = Object.keys(initialMap).length;
     
     // Manual cleanup uses minOccurrences = 1 as per user request to unify logic
@@ -358,14 +324,14 @@ export class AiService {
     const autoFilteredCount = Object.keys(autoFilteredMap).length;
     console.log(`[Smart Cleanup] Step 1 complete. Kept ${autoFilteredCount}/${initialCount} terms.`);
     
-    const intermediateText = this.glossaryMapToString(autoFilteredMap);
+    const intermediateText = glossaryToOutputStr(autoFilteredMap);
     if (autoFilteredCount === 0) return "";
 
     // Step 2: AI Optimization
     console.log(`[Smart Cleanup] Step 2: AI optimization for quality and redundancy...`);
     try {
         const optimizedText = await this.optimizeGlossary(intermediateText);
-        const finalMap = this.parseGlossary(optimizedText);
+        const finalMap = parseGlossaryStr(optimizedText);
         console.log(`[Smart Cleanup] Step 2 complete. AI refined it to ${Object.keys(finalMap).length} terms.`);
         return optimizedText;
     } catch (error) {
@@ -381,13 +347,13 @@ export class AiService {
   private filterDeltaGlossary(delta: string, current: string, posteriorText: string): { filtered: string, originalCount: number, filteredCount: number } {
     if (!delta) return { filtered: "", originalCount: 0, filteredCount: 0 };
     if (!posteriorText) {
-        const map = this.parseGlossary(delta);
+        const map = parseGlossaryStr(delta);
         const count = Object.keys(map).length;
         return { filtered: delta, originalCount: count, filteredCount: count };
     }
     
-    const deltaMap = this.parseGlossary(delta);
-    const currentMap = this.parseGlossary(current);
+    const deltaMap = parseGlossaryStr(delta);
+    const currentMap = parseGlossaryStr(current);
     
     const deltaEntries = Object.entries(deltaMap);
     const originalCount = deltaEntries.length;
@@ -411,7 +377,7 @@ export class AiService {
     }
 
     return {
-        filtered: this.glossaryMapToString(filteredMap),
+        filtered: glossaryToOutputStr(filteredMap),
         originalCount,
         filteredCount
     };
@@ -469,11 +435,19 @@ export class AiService {
         }
 
         const chunk = chunks[i];
-        const glossaryPrompt = this.config.enableGlossary 
-            ? (currentGlossary 
-                ? `\n\nCURRENT GLOSSARY:\n${currentGlossary}`
-                : "\n\nCURRENT GLOSSARY: (Empty)")
-            : "";
+        let glossaryPrompt = "";
+        if (this.config.enableGlossary) {
+            if (currentGlossary) {
+                const fullMap = parseGlossaryStr(currentGlossary);
+                const relevantMap = this.filterGlossaryByInclusion(fullMap, chunk);
+                const relevantGlossary = glossaryToOutputStr(relevantMap);
+                glossaryPrompt = relevantGlossary 
+                    ? `\n\nCURRENT GLOSSARY:\n${relevantGlossary}`
+                    : "\n\nCURRENT GLOSSARY: (Empty)";
+            } else {
+                glossaryPrompt = "\n\nCURRENT GLOSSARY: (Empty)";
+            }
+        }
 
         const chunkInstruction = chunks.length > 1
             ? `${baseSystemInstruction}\n\n[System Note: This is part ${i + 1} of ${chunks.length} of the chapter. Maintain strict terminology and stylistic consistency with previous parts.]${glossaryPrompt}`

@@ -14,6 +14,7 @@ import { AiService } from './services/geminiService';
 import { PersistenceService } from './services/persistenceService';
 import { AppStatus, AppConfig, Chapter, ProcessingLog, SessionState } from './types';
 import { RECOMMENDED_TRANSLATION_PROMPT, TWO_STEP_BASE_PROMPT } from './prompts';
+import { parseGlossaryStr, glossaryToOutputStr } from './utils/glossaryUtils';
 
 const DEFAULT_CONFIG: AppConfig = {
   apiKey: '',
@@ -104,41 +105,6 @@ const MarkdownImage: React.FC<{ src?: string, alt?: string, chapterPath: string,
     );
 };
 
-const parseGlossaryStr = (str: string): Record<string, string> => {
-  const lines = str.split('\n');
-  const result: Record<string, string> = {};
-  lines.forEach(line => {
-    // 1. Try structural format: SOURCE: xxx | TARGET: yyy
-    const structuralMatch = line.match(/SOURCE:\s*(.*?)\s*\|\s*TARGET:\s*(.*)/i);
-    if (structuralMatch) {
-        const key = structuralMatch[1].trim();
-        const value = structuralMatch[2].trim();
-        if (key && value) {
-            result[key] = value;
-            return;
-        }
-    }
-
-    // 2. Fallback to simple format: Key: Value
-    const parts = line.split(':');
-    if (parts.length >= 2) {
-      const key = parts[0].trim();
-      const value = parts.slice(1).join(':').trim();
-      if (key && value && !key.toLowerCase().includes('source') && !key.toLowerCase().includes('target')) {
-          result[key] = value;
-      }
-    }
-  });
-  return result;
-}
-
-const glossaryToOutputStr = (glossary: Record<string, string>): string => {
-  return Object.entries(glossary)
-    .sort()
-    .map(([k, v]) => `SOURCE: ${k} | TARGET: ${v}`)
-    .join('\n');
-}
-
 const LogoWatermark: React.FC = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="280" height="280" viewBox="80 80 502 502" fill="none" className="text-white opacity-[0.15] pointer-events-none select-none">
     {/* 卡片主体 */}
@@ -178,6 +144,8 @@ const App: React.FC = () => {
   const [previewChapter, setPreviewChapter] = useState<Chapter | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]); // Added state for chapters to trigger re-renders
   const [isCleaningGlossary, setIsCleaningGlossary] = useState(false);
+  const isCleaningGlossaryRef = useRef(false);
+  const pendingGlossaryQueueRef = useRef<Record<string, string>[]>([]);
   
   const epubService = useRef(new EpubService());
   const persistenceService = useRef(new PersistenceService());
@@ -188,9 +156,6 @@ const App: React.FC = () => {
   const chaptersRef = useRef<Chapter[]>([]);
   const imagesRef = useRef<Record<string, Blob>>({});
   const coverPathRef = useRef<string | undefined>(undefined);
-  const lastOptimizedCountRef = useRef<number>(0);
-  const lastOptimizedMapRef = useRef<Record<string, string>>({});
-  const newTermsAccumulatedRef = useRef<number>(0);
   const activeChapterIndexRef = useRef<number>(-1);
   const activeChunkIndexRef = useRef<number>(0);
 
@@ -300,9 +265,10 @@ const App: React.FC = () => {
         return;
     }
 
-    if (isCleaningGlossary) return;
+    if (isCleaningGlossaryRef.current) return;
     
     setIsCleaningGlossary(true);
+    isCleaningGlossaryRef.current = true;
     
     try {
         const aiService = new AiService(config);
@@ -344,93 +310,6 @@ const App: React.FC = () => {
             
             const finalCount = Object.keys(finalMap).length;
             addLog(`[Agent] Smart Cleanup finished. Result: ${finalCount} / ${termCount} terms kept.`, 'success');
-        } else {
-            // Incremental Logic: Only send terms that haven't been optimized yet
-            const masterTermsKeys = Object.keys(lastOptimizedMapRef.current).join(", ");
-            const candidatesMap: Record<string, string> = {};
-            
-            Object.entries(currentGlossaryMap).forEach(([k, v]) => {
-                if (!lastOptimizedMapRef.current[k]) {
-                    candidatesMap[k] = v;
-                }
-            });
-            
-            const candidateCount = Object.keys(candidatesMap).length;
-            if (candidateCount === 0) {
-                setIsCleaningGlossary(false);
-                return;
-            }
-
-            // Calculate Posterior Text for filtering candidates
-            let referenceText = "";
-            const currentIdx = activeChapterIndexRef.current;
-            if (currentIdx !== -1) {
-                const currentChapter = chaptersRef.current[currentIdx];
-                const chapterChunks = currentChapter.markdown.split(/\n{2,}/);
-                const startChunk = activeChunkIndexRef.current; // Use current translation point
-                const remainingChapterText = chapterChunks.slice(startChunk).join('\n');
-                const futureChaptersText = chaptersRef.current.slice(currentIdx + 1).map(c => c.markdown).join('\n');
-                referenceText = remainingChapterText + "\n" + futureChaptersText;
-            }
-
-            // Step 1: Pre-filter candidates by inclusion in future text (min 1 occurrence)
-            let filteredCandidatesMap = candidatesMap;
-            if (referenceText.trim()) {
-                filteredCandidatesMap = aiService.filterGlossaryByInclusion(candidatesMap, referenceText, 1);
-            }
-            
-            const newTermsText = glossaryToOutputStr(filteredCandidatesMap);
-            const filteredCount = Object.keys(filteredCandidatesMap).length;
-            
-            if (filteredCount === 0) {
-                // If all new terms were dropped by filtering, we still mark the originals as "reviewed"
-                lastOptimizedMapRef.current = { ...lastOptimizedMapRef.current, ...candidatesMap };
-                setIsCleaningGlossary(false);
-                return;
-            }
-
-            addLog(`[Agent] Glossary Janitor: Reviewing ${filteredCount} future-relevant terms (Dropped ${candidateCount - filteredCount})...`, 'process');
-            
-            // Pass baseline keys instead of full text to minimize prompt size
-            const baselineSummary = masterTermsKeys.length > 500 
-                ? masterTermsKeys.substring(0, 500) + "... (and more)" 
-                : masterTermsKeys || "(None)";
-
-            const optimizedDeltaText = await aiService.optimizeIncrementalGlossary(newTermsText, baselineSummary);
-            
-            // Create full glossary by merging optimized delta with master
-            const deltaMap = parseGlossaryStr(optimizedDeltaText);
-            
-            // REFINED MERGE LOGIC:
-            // 1. Get current state from DB
-            const liveMap = await persistenceService.current.loadGlossary();
-            
-            // 2. Remove the "Dirty" candidates we just reviewed from the live set
-            const cleanedLiveMap = { ...liveMap };
-            Object.keys(candidatesMap).forEach(k => {
-                delete cleanedLiveMap[k];
-            });
-            
-            // 3. Add the "Optimized" versions back
-            const mergedMap = { ...cleanedLiveMap, ...deltaMap };
-            
-            await persistenceService.current.replaceGlossary(mergedMap);
-            const savedMap = await persistenceService.current.loadGlossary();
-            
-            // Sync UI and internal state
-            setGlossaryMap(savedMap);
-            setLiveGlossary(glossaryToOutputStr(savedMap));
-            lastOptimizedCountRef.current = Object.keys(savedMap).length;
-            lastOptimizedMapRef.current = savedMap;
-            
-            const addedCount = Object.keys(deltaMap).length;
-            const rejectedCount = candidateCount - addedCount;
-
-            if (rejectedCount > 0) {
-                addLog(`[Agent] Glossary cleaned. Filtered ${rejectedCount} redundant entries.`, 'success');
-            } else {
-                addLog(`[Agent] Glossary updated with ${addedCount} new terms.`, 'success');
-            }
         }
     } catch (e) {
         if (e instanceof Error && e.message === "PAUSE_SIGNAL") {
@@ -439,7 +318,26 @@ const App: React.FC = () => {
         console.error("Glossary optimization failed:", e);
         addLog(`[Agent] Glossary optimization failed: ${e instanceof Error ? e.message : 'Unknown error'}`, 'error');
     } finally {
+        if (pendingGlossaryQueueRef.current.length > 0) {
+            const queuedDeltaTerms: Record<string, string> = {};
+            while (pendingGlossaryQueueRef.current.length > 0) {
+                const item = pendingGlossaryQueueRef.current.shift();
+                if (item) {
+                   Object.assign(queuedDeltaTerms, item);
+                }
+            }
+            if (Object.keys(queuedDeltaTerms).length > 0) {
+                persistenceService.current.saveGlossaryTerms(queuedDeltaTerms).then(async addedCount => {
+                    if (addedCount > 0) {
+                        const masterGlossary = await persistenceService.current.loadGlossary();
+                        setGlossaryMap(masterGlossary);
+                        setLiveGlossary(glossaryToOutputStr(masterGlossary));
+                    }
+                }).catch(e => console.error("Failed to flush pending glossary queue:", e));
+            }
+        }
         setIsCleaningGlossary(false);
+        isCleaningGlossaryRef.current = false;
     }
   };
 
@@ -602,10 +500,9 @@ const App: React.FC = () => {
 
     // --- Translation ---
     if (chapter.translatedMarkdown && forceTranslateIndices.length === 0) {
-        // Already translated, use its glossary if it exists
-        if (chapter.glossary) {
-            currentGlossary = chapter.glossary;
-        }
+        // Already translated, just return the starting master glossary
+        // Do NOT overwrite it with chapter.glossary, which would wipe manual edits!
+        return startGlossary;
     } else {
         setStatus(AppStatus.TRANSLATING);
         addLog(`Translating [${index+1}/${chapters.length}]: ${chapter.title}${forceTranslateIndices.length ? ' (Retrying failed parts)' : ''}`, "process");
@@ -652,15 +549,18 @@ const App: React.FC = () => {
                   if (updatedGlossary) {
                       const deltaTerms = parseGlossaryStr(updatedGlossary);
                       if (Object.keys(deltaTerms).length > 0) {
-                          const addedCount = await persistenceService.current.saveGlossaryTerms(deltaTerms);
-                          if (addedCount > 0) {
-                              newTermsAccumulatedRef.current += addedCount;
-                              // Reload full glossary to ensure UI and next chunks stay in sync
-                              const masterGlossary = await persistenceService.current.loadGlossary();
-                              setGlossaryMap(masterGlossary);
-                              const fullStr = glossaryToOutputStr(masterGlossary);
-                              setLiveGlossary(fullStr);
-                              currentGlossary = fullStr;
+                          if (isCleaningGlossaryRef.current) {
+                              pendingGlossaryQueueRef.current.push(deltaTerms);
+                          } else {
+                              const addedCount = await persistenceService.current.saveGlossaryTerms(deltaTerms);
+                              if (addedCount > 0) {
+                                  // Reload full glossary to ensure UI and next chunks stay in sync
+                                  const masterGlossary = await persistenceService.current.loadGlossary();
+                                  setGlossaryMap(masterGlossary);
+                                  const fullStr = glossaryToOutputStr(masterGlossary);
+                                  setLiveGlossary(fullStr);
+                                  currentGlossary = fullStr;
+                              }
                           }
                       }
                   }
@@ -677,14 +577,6 @@ const App: React.FC = () => {
                   const actionWord = config.enableProofreading ? "Translated & Reviewed" : "Translated";
                   addLog(`  > ${actionWord} part ${current}/${total} of "${chapter.title}"... ${glossaryInfo}`, 'info');
                   
-                  // Trigger Glossary Cleaning every 10 NEW terms
-                  if (config.enableGlossary && newTermsAccumulatedRef.current >= 10) {
-                      newTermsAccumulatedRef.current = 0; // Reset threshold
-                      optimizeGlossary().then(async () => {
-                          const freshGlossary = await persistenceService.current.loadGlossary();
-                          currentGlossary = glossaryToOutputStr(freshGlossary);
-                      });
-                  }
 
                   if (chapter.fallbackChunks) {
                     chapter.fallbackChunks = chapter.fallbackChunks.filter(idx => idx !== current - 1);
@@ -788,14 +680,9 @@ const App: React.FC = () => {
             failedIndices = sourceChunks.map((_, i) => i);
         }
         
-        // Find most recent glossary before this chapter
-        let runningGlossary = "";
-        for (let j = index - 1; j >= 0; j--) {
-            if (chapters[j].glossary) {
-                runningGlossary = chapters[j].glossary!;
-                break;
-            }
-        }
+        // Fetch the latest master glossary from DB for accurate retry
+        const freshMap = await persistenceService.current.loadGlossary();
+        const runningGlossary = glossaryToOutputStr(freshMap);
         
         await processChapter(index, aiService, chapters, effectiveSystemInstruction, failedIndices, runningGlossary);
         
@@ -1577,7 +1464,8 @@ const App: React.FC = () => {
                             </button>
                              <button 
                                 onClick={() => isBulkEdit ? handleUpdateGlossary(liveGlossary) : handleSaveGlossaryMap()}
-                                className="text-[10px] px-3 py-1.5 rounded-none bg-white hover:bg-neutral-200 text-black font-bold font-mono uppercase tracking-widest transition-all shadow-none flex items-center gap-2 border border-white"
+                                disabled={isWorking}
+                                className="text-[10px] px-3 py-1.5 rounded-none bg-white hover:bg-neutral-200 text-black font-bold font-mono uppercase tracking-widest transition-all shadow-none flex items-center gap-2 border border-white disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 <Save className="w-3 h-3" /> Save Changes
                             </button>
@@ -1589,8 +1477,9 @@ const App: React.FC = () => {
                             <textarea 
                                 value={liveGlossary}
                                 onChange={(e) => setLiveGlossary(e.target.value)}
+                                disabled={isWorking}
                                 placeholder="No terms extracted yet..."
-                                className="w-full h-full p-6 font-mono text-sm text-neutral-300 outline-none transition-colors resize-none bg-transparent custom-scrollbar"
+                                className="w-full h-full p-6 font-mono text-sm text-neutral-300 outline-none transition-colors resize-none bg-transparent custom-scrollbar disabled:opacity-50"
                             />
                         ) : (
                             <div className="flex-1 overflow-x-hidden overflow-y-auto custom-scrollbar p-2">
@@ -1610,7 +1499,8 @@ const App: React.FC = () => {
                                                         type="text" 
                                                         value={key}
                                                         onChange={(e) => handleUpdateTerm(key, e.target.value, value as string)}
-                                                        className="w-full bg-transparent p-2 text-white outline-none focus:bg-neutral-800 rounded-none transition-colors font-mono text-sm"
+                                                        disabled={isWorking}
+                                                        className="w-full bg-transparent p-2 text-white outline-none focus:bg-neutral-800 rounded-none transition-colors font-mono text-sm disabled:opacity-50"
                                                     />
                                                 </td>
                                                 <td className="p-1">
@@ -1618,13 +1508,15 @@ const App: React.FC = () => {
                                                         type="text" 
                                                         value={value}
                                                         onChange={(e) => handleUpdateTerm(key, key, e.target.value)}
-                                                        className="w-full bg-transparent p-2 text-neutral-400 focus:text-white outline-none focus:bg-neutral-800 rounded-none transition-colors font-mono text-sm"
+                                                        disabled={isWorking}
+                                                        className="w-full bg-transparent p-2 text-neutral-400 focus:text-white outline-none focus:bg-neutral-800 rounded-none transition-colors font-mono text-sm disabled:opacity-50"
                                                     />
                                                 </td>
                                                 <td className="p-1">
                                                     <button 
                                                         onClick={() => handleDeleteTerm(key)}
-                                                        className="p-1.5 text-neutral-500 hover:text-white transition-colors rounded-none hover:bg-neutral-800 opacity-0 group-hover/row:opacity-100 border border-transparent hover:border-white/20"
+                                                        disabled={isWorking}
+                                                        className="p-1.5 text-neutral-500 hover:text-white transition-colors rounded-none hover:bg-neutral-800 opacity-0 group-hover/row:opacity-100 border border-transparent hover:border-white/20 disabled:opacity-0"
                                                     >
                                                         <X className="w-3.5 h-3.5" />
                                                     </button>
@@ -1643,7 +1535,8 @@ const App: React.FC = () => {
                                 <div className="p-3 border-t border-white/10 mt-1">
                                     <button 
                                         onClick={handleAddTerm}
-                                        className="flex items-center gap-2 text-[10px] font-mono text-neutral-500 hover:text-white transition-colors uppercase tracking-widest py-1"
+                                        disabled={isWorking}
+                                        className="flex items-center gap-2 text-[10px] font-mono text-neutral-500 hover:text-white transition-colors uppercase tracking-widest py-1 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
                                         <Plus className="w-3 h-3" /> Add Term
                                     </button>
