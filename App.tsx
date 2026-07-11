@@ -833,7 +833,7 @@ const App: React.FC = () => {
     try {
         const chaptersToPack = chaptersList.filter(c => !c.isSkippable);
         const excludeFileNames = chaptersList
-            .filter(c => c.isSkippable || c.isReference)
+            .filter(c => c.isSkippable)
             .map(c => c.fileName);
 
         // Try to get the original ZIP: IndexedDB cache first, then currentFile as fallback
