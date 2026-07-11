@@ -451,66 +451,6 @@ const App: React.FC = () => {
     addLog("Workflow reset.", "info");
   };
 
-  const handleReparseKeepTranslations = async () => {
-    addLog("Re-parsing EPUB while preserving existing translations...", "process");
-    try {
-        const zipBuffer = await persistenceService.current.loadOriginalZip();
-        if (!zipBuffer) {
-            throw new Error("Original EPUB cache missing. Cannot re-parse.");
-        }
-        
-        const mimeType = "application/epub+zip";
-        const blob = new Blob([zipBuffer], { type: mimeType });
-        const file = new File([blob], currentFile?.name || "book.epub", { type: mimeType });
-        
-        setStatus(AppStatus.PARSING);
-        const parsed = await epubService.current.parseEpub(file);
-        
-        // Merge translations from current chaptersRef
-        const oldChaptersMap = new Map(chaptersRef.current.map(c => [c.fileName, c]));
-        
-        const mergedChapters = parsed.chapters.map(newCh => {
-            const oldCh = oldChaptersMap.get(newCh.fileName);
-            if (oldCh) {
-                return {
-                    ...newCh,
-                    // Keep translations and progress
-                    translatedMarkdown: oldCh.translatedMarkdown,
-                    proofreadMarkdown: oldCh.proofreadMarkdown,
-                    translatedChunks: oldCh.translatedChunks,
-                    proofreadChunks: oldCh.proofreadChunks,
-                    fallbackChunks: oldCh.fallbackChunks,
-                    fallbackProofreadChunks: oldCh.fallbackProofreadChunks,
-                    chunkGlossaries: oldCh.chunkGlossaries,
-                    // keep user skips & references configuration
-                    isSkippable: oldCh.isSkippable,
-                    isReference: oldCh.isReference,
-                };
-            }
-            return newCh;
-        });
-
-        // Save back to ref, state, and IndexedDB
-        chaptersRef.current = mergedChapters;
-        setChapters(mergedChapters);
-        await persistenceService.current.saveChapters(mergedChapters);
-        
-        // Update metadata refs
-        opfPathRef.current = parsed.opfPath;
-        opfDirRef.current = parsed.opfDir;
-        cssFilesRef.current = parsed.cssFiles;
-        coverPathRef.current = parsed.coverPath;
-        
-        await saveSessionState(AppStatus.IDLE);
-        setStatus(AppStatus.IDLE);
-        addLog("Re-parsing complete! Existing translations preserved. Any updated footnotes/formatting can now be translated.", "success");
-    } catch (e) {
-        console.error("Re-parse failed:", e);
-        addLog(`Re-parse failed: ${e instanceof Error ? e.message : 'Unknown error'}`, "error");
-        setStatus(AppStatus.ERROR);
-    }
-  };
-
   const getLocalizedSourceName = (lang: string) => {
     const mapping: Record<string, string> = {
       "English": "English",
@@ -1251,22 +1191,13 @@ const App: React.FC = () => {
                                 </button>
                             </div>
                         ) : (
-                             <div className="flex items-center gap-2">
-                                 <button 
-                                     onClick={handleReparseKeepTranslations}
-                                     className="text-black hover:text-white transition-colors p-2.5 hover:bg-black rounded-none border border-transparent hover:border-black"
-                                     title="Re-parse EPUB (Keep existing translations, updates footnote/table formatting)"
-                                 >
-                                     <RefreshCw className="w-4 h-4" />
-                                 </button>
-                                 <button 
-                                     onClick={() => setShowConfirmReset(true)}
-                                     className="text-black hover:text-white transition-colors p-2.5 hover:bg-black rounded-none border border-transparent hover:border-black"
-                                     title="Remove file and clear progress"
-                                 >
-                                     <Trash2 className="w-4 h-4"/>
-                                 </button>
-                             </div>
+                            <button 
+                                onClick={() => setShowConfirmReset(true)}
+                                className="text-black hover:text-white transition-colors p-2.5 hover:bg-black rounded-none border border-transparent hover:border-black"
+                                title="Remove file and clear progress"
+                            >
+                                <Trash2 className="w-4 h-4"/>
+                            </button>
                         )
                      )}
                  </div>
