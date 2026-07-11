@@ -4,6 +4,7 @@ import TurndownService from 'turndown';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import katex from 'katex';
+import markedFootnote from 'marked-footnote';
 import { Chapter } from '../types';
 
 // Initialize Markdown converters
@@ -86,6 +87,10 @@ const mathExtension = {
 };
 
 marked.use(mathExtension as any);
+marked.use(markedFootnote({ 
+  prefixId: 'fn-',
+  refMarkers: true 
+}) as any);
 
 // Helper to escape XML
 const escapeXml = (unsafe: any): string => {
@@ -259,7 +264,14 @@ const DEFAULT_EPUB_CSS = `
 `;
 
 export class EpubService {
-  async parseEpub(file: File): Promise<{ chapters: Chapter[], images: Record<string, Blob>, coverPath?: string }> {
+  async parseEpub(file: File): Promise<{ 
+    chapters: Chapter[], 
+    images: Record<string, Blob>, 
+    coverPath?: string,
+    opfPath: string,
+    opfDir: string,
+    cssFiles: string[]
+  }> {
     const zip = new JSZip();
     const loadedZip = await zip.loadAsync(file);
 
@@ -287,6 +299,10 @@ export class EpubService {
       acc[item.getAttribute("id")!] = item.getAttribute("href")!;
       return acc;
     }, {} as Record<string, string>);
+
+    // Get list of CSS files
+    const cssFiles = Array.from(opfDoc.querySelectorAll("manifest > item[media-type='text/css']"))
+      .map(item => opfDir + item.getAttribute("href")!);
 
     // Find Navigation File (NCX or NAV)
     let tocMap: Record<string, string> = {};
@@ -352,6 +368,7 @@ export class EpubService {
 
     const chapters: Chapter[] = [];
     const images: Record<string, Blob> = {};
+    const linkedFootnoteFiles = new Set<string>();
 
     for (const [path, fileObj] of Object.entries(loadedZip.files)) {
       if (path.match(/\.(png|jpe?g|gif|svg|webp)$/i)) {
@@ -360,6 +377,7 @@ export class EpubService {
       }
     }
 
+    // Pass 1: Parse spine elements
     for (const ref of spineRefs) {
       const id = ref.getAttribute("idref");
       if (!id || !manifestItems[id]) continue;
@@ -420,8 +438,39 @@ export class EpubService {
         const isSkippable = /^(copyright|colophon|imprint|legal|cover|title\s?page|table\s?of\s?contents|^toc$|dedication)/i.test(lowerTitle)
           || /(copyright|cover|title[\-_]?page|toc|contents)\.(xhtml|html|xml)$/i.test(lowerHref);
 
-        const isReference = /^(references|bibliography|works\s?cited|sources|credits|notes|endnotes)/i.test(lowerTitle)
-          || /(references|bibliography|notes)\.(xhtml|html|xml)$/i.test(lowerHref);
+        // Expanded isReference to match footnotes, _fn123, endnotes etc.
+        const isReference = /^(references|bibliography|works\s?cited|sources|credits|notes|endnotes|footnotes)/i.test(lowerTitle)
+          || /(references|bibliography|notes|foot|footnote|endnote|_fn\d+)\.(xhtml|html|xml)$/i.test(lowerHref)
+          || /(references|bibliography|notes|foot|footnote|endnote|_fn\d+)/i.test(lowerHref);
+
+        // Collect links that look like footnotes to build linkedFootnoteFiles
+        const links = doc.querySelectorAll('a[href]');
+        for (let i = 0; i < links.length; i++) {
+          const a = links[i];
+          const hrefAttr = a.getAttribute('href');
+          const text = a.textContent?.trim() || "";
+          
+          const isFootnoteText = /^\d+$/.test(text)
+                               || /^[*†‡§¶‖\d]+$/.test(text)
+                               || /^[ivxlc\d]+$/i.test(text);
+                               
+          if (hrefAttr && isFootnoteText) {
+            const url = hrefAttr;
+            if (!url.startsWith('http') && !url.startsWith('//')) {
+              const filePart = url.includes('#') ? url.split('#')[0] : url;
+              if (filePart) {
+                const currentDir = href.substring(0, href.lastIndexOf('/') + 1);
+                const parts = (currentDir + filePart).split('/');
+                const resolved: string[] = [];
+                for (const p of parts) {
+                  if (p === '..') resolved.pop();
+                  else if (p !== '.' && p !== '') resolved.push(p);
+                }
+                linkedFootnoteFiles.add(resolved.join('/'));
+              }
+            }
+          }
+        }
 
         chapters.push({
           id,
@@ -437,223 +486,409 @@ export class EpubService {
       }
     }
 
-    return { chapters, images, coverPath };
+    // Pass 1.5: Mark chapters as reference if they are linked as footnotes and are not TOC points
+    for (const ch of chapters) {
+      if (linkedFootnoteFiles.has(ch.fileName) && !ch.isTocPoint) {
+        ch.isReference = true;
+      }
+    }
+
+    // Build Footnote Content Map (with DOM Closest & Return-Link Stripping heuristics)
+    const footnoteContentMap: Record<string, string> = {};
+
+    for (const chapter of chapters) {
+      const doc = parser.parseFromString(chapter.content, "text/html");
+      const textLen = doc.body.textContent?.trim().length || 0;
+      
+      // Heuristic fallback for Calibre fragmented footnote pages (short page with link)
+      const isSuspiciousFootnotePage = textLen > 0 && textLen < 1500 && doc.querySelectorAll('a[href]').length > 0;
+
+      if (chapter.isReference || isSuspiciousFootnotePage || doc.querySelectorAll('.footnotes, [epub\\:type="footnotes"]').length > 0) {
+        if (isSuspiciousFootnotePage && !chapter.isSkippable) {
+          chapter.isReference = true;
+        }
+
+        const elementsWithId = doc.querySelectorAll('[id]');
+        for (const el of elementsWithId) {
+          const id = el.getAttribute('id');
+          if (!id) continue;
+          
+          const key = `${chapter.fileName}#${id}`;
+          
+          // 1. Find block boundary (drill up to block element)
+          const blockTags = ['P', 'LI', 'DIV', 'ASIDE', 'BLOCKQUOTE', 'SECTION', 'TR', 'DD', 'DT', 'FIGURE'];
+          let boundary = el;
+          while (boundary.parentElement && !blockTags.includes(boundary.tagName.toUpperCase()) && boundary.parentElement.tagName.toUpperCase() !== 'BODY') {
+            boundary = boundary.parentElement;
+          }
+
+          // 2. Collect HTML until next valid footnote ID
+          const tempDiv = document.createElement('div');
+          tempDiv.appendChild(boundary.cloneNode(true));
+          
+          let curr = boundary.nextElementSibling;
+          while (curr) {
+            let hasValidNextFootnote = false;
+            // A valid footnote boundary is an element with an ID that also has text content
+            if (curr.id && curr.textContent?.trim().length > 0) {
+              hasValidNextFootnote = true;
+            } else {
+              const idsInCurr = curr.querySelectorAll('[id]');
+              for (let i = 0; i < idsInCurr.length; i++) {
+                if (idsInCurr[i].textContent?.trim().length > 0) {
+                  hasValidNextFootnote = true;
+                  break;
+                }
+              }
+            }
+            
+            if (hasValidNextFootnote) {
+              break;
+            }
+            
+            tempDiv.appendChild(curr.cloneNode(true));
+            curr = curr.nextElementSibling;
+          }
+
+          // 3. Strip return links
+          const links = tempDiv.querySelectorAll('a');
+          for (let i = 0; i < links.length; i++) {
+            const a = links[i];
+            const text = a.textContent || '';
+            const epubType = a.getAttribute('epub:type') || '';
+            const hrefAttr = a.getAttribute('href') || '';
+            
+            const isBacklinkKeyword = /↩|⬆|↑|←|back to text/i.test(text);
+            const isEpubBacklink = epubType === 'backlink';
+            const isTargetingOtherFile = hrefAttr && !hrefAttr.startsWith('#');
+            
+            if (isBacklinkKeyword || isEpubBacklink || (isTargetingOtherFile && /^\s*[\d\[\]]+\s*$/.test(text))) {
+              a.remove();
+            }
+          }
+
+          let mdContent = turndownService.turndown(tempDiv.innerHTML).trim();
+          
+          // Use <br><br> for multi-paragraph footnotes to ensure they stay on a single Markdown definition line
+          mdContent = mdContent.replace(/\n\n+/g, '<br><br>');
+          // Clean prefix (numbers or letters)
+          mdContent = mdContent.replace(/^[a-z0-9]+[\.\)]\s*/i, '');
+
+          if (mdContent.length > 0) {
+            footnoteContentMap[key] = mdContent;
+          }
+        }
+
+        // Fallback: if no [id] elements found, treat entire body as a single footnote entry
+        // (common in Calibre PDF-to-EPUB where footnote overflow pages have no anchors)
+        if (elementsWithId.length === 0 && chapter.isReference) {
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = doc.body.innerHTML;
+
+          // Strip return links
+          const links = tempDiv.querySelectorAll('a');
+          for (let i = 0; i < links.length; i++) {
+            const a = links[i];
+            const text = a.textContent || '';
+            const epubType = a.getAttribute('epub:type') || '';
+            const hrefAttr = a.getAttribute('href') || '';
+            
+            const isBacklinkKeyword = /↩|⬆|↑|←|back to text/i.test(text);
+            const isEpubBacklink = epubType === 'backlink';
+            const isTargetingOtherFile = hrefAttr && !hrefAttr.startsWith('#');
+            
+            if (isBacklinkKeyword || isEpubBacklink || (isTargetingOtherFile && /^\s*[\d\[\]]+\s*$/.test(text))) {
+              a.remove();
+            }
+          }
+
+          let mdContent = turndownService.turndown(tempDiv.innerHTML).trim();
+          mdContent = mdContent.replace(/\n\n+/g, '<br><br>');
+          mdContent = mdContent.replace(/^[a-z0-9]+[\.\)]\s*/i, '');
+
+          if (mdContent.length > 0) {
+            // Key by filename only (no fragment) so fragment-less links can match
+            footnoteContentMap[chapter.fileName] = mdContent;
+          }
+        }
+      }
+    }
+
+    // Pass 2: Inline Footnote Links into Markdown
+    const inlineFootnotes = (
+      markdown: string,
+      currentFileName: string,
+      fnContentMap: Record<string, string>
+    ): string => {
+      let fnCounter = 0;
+      const linkRegex = /\[([^\]]*)\]\(([^)]+)\)/g;
+      const replacements: Array<{
+        original: string;
+        replacement: string;
+        definition: string;
+        index: number;
+      }> = [];
+
+      let match;
+      while ((match = linkRegex.exec(markdown)) !== null) {
+        const fullMatch = match[0];
+        const linkText = match[1];
+        const url = match[2];
+
+        // Support both fragment links (file.html#anchor) and fragment-less links (file.html)
+        let filePart = '';
+        let anchor = '';
+        if (url.includes('#')) {
+          [filePart, anchor] = url.split('#');
+        } else {
+          filePart = url;
+        }
+
+        const isFootnoteText = /^\d+$/.test(linkText.trim())
+                             || /^[*†‡§¶‖]+$/.test(linkText.trim())
+                             || /^[ivxlc]+$/i.test(linkText.trim());
+        if (!isFootnoteText) continue;
+
+        let lookupKey = '';
+        if (filePart) {
+          const currentDir = currentFileName.substring(0, currentFileName.lastIndexOf('/') + 1);
+          const parts = (currentDir + filePart).split('/');
+          const resolved: string[] = [];
+          for (const p of parts) {
+            if (p === '..') resolved.pop();
+            else if (p !== '.' && p !== '') resolved.push(p);
+          }
+          lookupKey = anchor ? `${resolved.join('/')}#${anchor}` : resolved.join('/');
+        } else {
+          lookupKey = `${currentFileName}#${anchor}`;
+        }
+
+        // Try exact key first, then fallback to filename-only key (for no-ID footnote files)
+        let content = fnContentMap[lookupKey];
+        if (!content && anchor && filePart) {
+          const currentDir = currentFileName.substring(0, currentFileName.lastIndexOf('/') + 1);
+          const parts = (currentDir + filePart).split('/');
+          const resolved: string[] = [];
+          for (const p of parts) {
+            if (p === '..') resolved.pop();
+            else if (p !== '.' && p !== '') resolved.push(p);
+          }
+          content = fnContentMap[resolved.join('/')];
+        }
+        if (content) {
+          fnCounter++;
+          replacements.push({
+            original: fullMatch,
+            replacement: `[^${fnCounter}]`,
+            definition: `[^${fnCounter}]: ${content}`,
+            index: match.index
+          });
+        }
+      }
+
+      if (replacements.length === 0) return markdown;
+
+      let result = markdown;
+      for (const r of [...replacements].reverse()) {
+        result = result.substring(0, r.index)
+               + r.replacement
+               + result.substring(r.index + r.original.length);
+      }
+
+      const finalParagraphs = result.split('\n\n');
+      const outputParagraphs: string[] = [];
+      const defMap = Object.fromEntries(replacements.map(r => [r.replacement, r.definition]));
+      const usedDefs = new Set<string>();
+
+      for (const para of finalParagraphs) {
+        outputParagraphs.push(para);
+        const fnRefs = para.match(/\[\^\d+\]/g) || [];
+        for (const ref of fnRefs) {
+          if (defMap[ref] && !usedDefs.has(ref)) {
+            outputParagraphs.push(defMap[ref]);
+            usedDefs.add(ref);
+          }
+        }
+      }
+
+      return outputParagraphs.join('\n\n');
+    };
+
+    for (const chapter of chapters) {
+      if (chapter.isReference || chapter.isSkippable || !chapter.markdown) continue;
+      chapter.markdown = inlineFootnotes(chapter.markdown, chapter.fileName, footnoteContentMap);
+    }
+
+    return { 
+      chapters, 
+      images, 
+      coverPath,
+      opfPath,
+      opfDir,
+      cssFiles
+    };
   }
 
   async generateEpub(
     chapters: Chapter[], 
-    originalImages: Record<string, Blob>, 
+    originalZip: JSZip, 
+    opfPath: string, 
+    opfDir: string,
+    cssFiles: string[],
     title: string,
     targetLanguage: string = "English",
-    originalCoverPath?: string
+    cssOverrides?: string,
+    excludeFileNames?: string[]
   ): Promise<Blob> {
-    const zip = new JSZip();
-
+    const zip = originalZip;
     const isChinese = targetLanguage.toLowerCase().includes('chinese');
-    const cssToUse = isChinese ? CHINESE_EPUB_CSS : DEFAULT_EPUB_CSS;
+    const defaultCss = isChinese ? CHINESE_EPUB_CSS : DEFAULT_EPUB_CSS;
+    const cssToUse = cssOverrides || defaultCss;
 
-    zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
+    // 1. Update title in OPF
+    const opfFile = zip.file(opfPath);
+    if (opfFile) {
+      let opfContent = await opfFile.async("string");
+      
+      const titlePattern = /<dc:title>[^<]*<\/dc:title>/i;
+      const safeTitle = escapeXml(title).trim();
+      const fullBookTitle = `${safeTitle}【TransLit】`;
+      if (titlePattern.test(opfContent)) {
+        opfContent = opfContent.replace(titlePattern, `<dc:title>${fullBookTitle}</dc:title>`);
+      }
+      
+      const langPattern = /<dc:language>[^<]*<\/dc:language>/i;
+      if (langPattern.test(opfContent)) {
+        opfContent = opfContent.replace(langPattern, `<dc:language>${isChinese ? 'zh' : 'en'}</dc:language>`);
+      }
+      
+      zip.file(opfPath, opfContent);
+    }
 
-    zip.file("META-INF/container.xml", `<?xml version="1.0"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-   <rootfiles>
-      <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
-   </rootfiles>
-</container>`);
+    // 1b. Remove excluded chapters (skipped + reference/footnote pages) from OPF and ZIP
+    if (excludeFileNames && excludeFileNames.length > 0) {
+      const currentOpfFile = zip.file(opfPath);
+      if (currentOpfFile) {
+        let opfContent = await currentOpfFile.async("string");
+        const parser = new DOMParser();
+        const opfDoc = parser.parseFromString(opfContent, "application/xml");
+        const excludeSet = new Set(excludeFileNames);
 
-    zip.file("css/styles.css", cssToUse);
-
-    const processedImageNames = new Set<string>();
-    let generatedCoverId: string | null = null;
-    let manifestImages = '';
-
-    for (const [path, blob] of Object.entries(originalImages)) {
-      const fileName = path.split('/').pop();
-      if (fileName && !processedImageNames.has(fileName)) {
-        zip.file(`images/${fileName}`, blob);
-        processedImageNames.add(fileName);
-
-        const imgId = `img_${fileName.replace(/\W/g, '_')}`;
-        
-        let properties = "";
-        if (originalCoverPath && path === originalCoverPath) {
-            properties = ' properties="cover-image"';
-            generatedCoverId = imgId;
+        // Find manifest item IDs whose href matches excluded fileNames
+        const idsToRemove = new Set<string>();
+        const manifestItems = opfDoc.querySelectorAll("manifest > item");
+        for (const item of manifestItems) {
+          const href = item.getAttribute("href");
+          const id = item.getAttribute("id");
+          if (href && id && excludeSet.has(href)) {
+            idsToRemove.add(id);
+            item.remove();
+            // Delete the physical XHTML file from ZIP
+            const fullPath = opfDir + href;
+            if (zip.file(fullPath)) {
+              zip.remove(fullPath);
+            }
+          }
         }
 
-        let mime = "image/jpeg";
-        if (fileName.endsWith('.png')) mime = "image/png";
-        if (fileName.endsWith('.gif')) mime = "image/gif";
-        if (fileName.endsWith('.svg')) mime = "image/svg+xml";
-        if (fileName.endsWith('.webp')) mime = "image/webp";
+        // Remove corresponding <itemref> entries from <spine>
+        const spineRefs = opfDoc.querySelectorAll("spine > itemref");
+        for (const ref of spineRefs) {
+          const idref = ref.getAttribute("idref");
+          if (idref && idsToRemove.has(idref)) {
+            ref.remove();
+          }
+        }
 
-        manifestImages += `<item id="${imgId}" href="images/${fileName}" media-type="${mime}"${properties}/>\n`;
+        // Serialize back and write
+        const serializer = new XMLSerializer();
+        zip.file(opfPath, serializer.serializeToString(opfDoc));
       }
     }
 
-    let manifestItems = '';
-    manifestItems += '<item id="css" href="css/styles.css" media-type="text/css"/>\n';
-    
-    manifestItems += manifestImages;
+    // 2. Overwrite CSS files
+    if (cssFiles && cssFiles.length > 0) {
+      for (const cssPath of cssFiles) {
+        zip.file(cssPath, cssToUse);
+      }
+    } else {
+      // Fallback: If no CSS files found in OPF, check common locations
+      const commonCssPaths = ["css/styles.css", "OEBPS/css/styles.css", "stylesheet.css", "styles.css"];
+      for (const path of commonCssPaths) {
+        if (zip.file(path) || zip.file(opfDir + path)) {
+          zip.file(zip.file(path) ? path : opfDir + path, cssToUse);
+        }
+      }
+    }
 
-    let spineItems = '';
-    let navPoints = '';
-    let navList = '';
-    let lastAddedTitle = '';
-    let navCount = 0;
+    // 3. Replace body of each translated/proofread XHTML chapter
+    for (const ch of chapters) {
+      if (!ch.translatedMarkdown && !ch.proofreadMarkdown) continue;
 
-    for (let i = 0; i < chapters.length; i++) {
-      const ch = chapters[i];
+      const fullPath = opfDir + ch.fileName;
+      const originalXhtmlFile = zip.file(fullPath);
+      if (!originalXhtmlFile) continue;
+
+      const originalXhtml = await originalXhtmlFile.async("string");
       const contentToUse = ch.proofreadMarkdown || ch.translatedMarkdown || ch.markdown || "";
-      
-      // Pre-process markdown to ensure single line breaks between text are treated as paragraph breaks.
-      // This helps when AI outputs single newlines instead of double newlines for dialogue.
-      const processedMarkdown = contentToUse
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .join('\n\n');
+
+      // Structure-aware line joining: keep table rows and list items
+      // on consecutive lines (\n), only separate paragraphs with \n\n
+      const isTableRow = (line: string) => /^\|/.test(line);
+      const isListItem = (line: string) => /^[-*+]\s|^\d+[.)]\s/.test(line);
+      const trimmedLines = contentToUse.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      const mdParts: string[] = [];
+      for (let i = 0; i < trimmedLines.length; i++) {
+        mdParts.push(trimmedLines[i]);
+        if (i < trimmedLines.length - 1) {
+          const curr = trimmedLines[i];
+          const next = trimmedLines[i + 1];
+          if ((isTableRow(curr) && isTableRow(next)) ||
+              (isListItem(curr) && isListItem(next))) {
+            mdParts.push('\n');
+          } else {
+            mdParts.push('\n\n');
+          }
+        }
+      }
+      const processedMarkdown = mdParts.join('');
 
       let htmlBody = await marked(processedMarkdown, {
         breaks: true,
         gfm: true
       });
-      
-      // XHTML Compliance: Close unclosed tags commonly generated by markdown parsers
+
       htmlBody = htmlBody
         .replace(/<br>/g, '<br/>')
         .replace(/<hr>/g, '<hr/>')
         .replace(/<img([^>]*)>/g, '<img$1/>');
 
+      // Preserve original relative image links
       htmlBody = htmlBody.replace(/src="([^"]+)"/g, (match, srcPath) => {
         if (srcPath.startsWith('http') || srcPath.startsWith('//')) return match;
-        
-        const fileName = srcPath.split('/').pop();
-        if (fileName) {
-          return `src="images/${fileName}"`;
-        }
-        return match;
+        return `src="${srcPath}"`;
       });
 
-      const safeTitle = escapeXml(ch.title).trim();
-      
-      // XHTML Compliance: Close unclosed tags commonly generated by markdown parsers
-      htmlBody = htmlBody
-        .replace(/<br>/g, '<br/>')
-        .replace(/<hr>/g, '<hr/>')
-        .replace(/<img([^>]*)>/g, '<img$1/>');
-
-      htmlBody = htmlBody.replace(/src="([^"]+)"/g, (match, srcPath) => {
-        if (srcPath.startsWith('http') || srcPath.startsWith('//')) return match;
-        
-        const fileName = srcPath.split('/').pop();
-        if (fileName) {
-          return `src="images/${fileName}"`;
-        }
-        return match;
-      });
-
-      // Added xmlns:m for MathML support
-      const fullHtml = `<?xml version='1.0' encoding='utf-8'?>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:m="http://www.w3.org/1998/Math/MathML" lang="${isChinese ? 'zh' : 'en'}">
-<head>
-  <title>${safeTitle || 'Chapter'}</title>
-  <link rel="stylesheet" href="css/styles.css" type="text/css"/>
-</head>
-<body>
-${htmlBody}
-</body>
-</html>`;
-
-      const fileName = `page_${i + 1}.xhtml`;
-      zip.file(fileName, fullHtml);
-
-      const id = `ch${i+1}`;
-      manifestItems += `<item id="${id}" href="${fileName}" media-type="application/xhtml+xml"/>\n`;
-      spineItems += `<itemref idref="${id}"/>\n`;
-      
-      // TOC Entry logic: Respect isTocPoint or force first chapter
-      if (ch.isTocPoint || (i === 0 && !chapters.some(c => c.isTocPoint))) {
-        navCount++;
-        navPoints += `<navPoint id="nav${navCount}" playOrder="${navCount}">
-          <navLabel><text>${safeTitle}</text></navLabel>
-          <content src="${fileName}"/>
-        </navPoint>\n`;
-
-        navList += `<li><a href="${fileName}">${safeTitle}</a></li>\n`;
+      let newXhtml = originalXhtml;
+      if (originalXhtml.match(/<body[^>]*>/i)) {
+        newXhtml = originalXhtml.replace(/<body[^>]*>([\s\S]*)<\/body>/i, () => {
+          const bodyTagMatch = originalXhtml.match(/<body[^>]*>/i);
+          const bodyTag = bodyTagMatch ? bodyTagMatch[0] : '<body>';
+          return `${bodyTag}\n${htmlBody}\n</body>`;
+        });
+      } else {
+        newXhtml = `<?xml version='1.0' encoding='utf-8'?>\n<html xmlns="http://www.w3.org/1999/xhtml">\n<body>\n${htmlBody}\n</body>\n</html>`;
       }
+
+      zip.file(fullPath, newXhtml);
     }
 
-    const navContent = `<?xml version="1.0" encoding="utf-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="${isChinese ? 'zh' : 'en'}">
-<head>
-  <title>Table of Contents</title>
-  <link rel="stylesheet" href="css/styles.css" type="text/css"/>
-  <meta charset="utf-8" />
-</head>
-<body>
-  <nav epub:type="toc" id="toc">
-    <h1>Table of Contents</h1>
-    <ol>
-      ${navList}
-    </ol>
-  </nav>
-  <nav epub:type="landmarks" hidden="hidden">
-    <ol>
-      <li><a epub:type="toc" href="nav.xhtml">Table of Contents</a></li>
-    </ol>
-  </nav>
-</body>
-</html>`;
-    
-    zip.file("nav.xhtml", navContent);
-
-    const safeBookTitle = escapeXml(title || 'Untitled Book');
-    const fullBookTitle = `${safeBookTitle}【TransLit】`;
-    const uuid = `urn:uuid:${crypto.randomUUID()}`;
-    const date = new Date().toISOString().split('T')[0];
-    
-    const coverMeta = generatedCoverId ? `<meta name="cover" content="${generatedCoverId}" />` : '';
-
-    manifestItems += `<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>\n`;
-
-    const opfContent = `<?xml version="1.0" encoding="utf-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="uuid_id" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/">
-    <dc:title>${fullBookTitle}</dc:title>
-    <dc:language>${isChinese ? 'zh' : 'en'}</dc:language>
-    <dc:identifier id="uuid_id">${uuid}</dc:identifier>
-    <dc:date>${date}</dc:date>
-    <meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}</meta>
-    ${coverMeta}
-  </metadata>
-  <manifest>
-    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-    ${manifestItems}
-  </manifest>
-  <spine toc="ncx">
-    <itemref idref="nav" linear="no"/>
-    ${spineItems}
-  </spine>
-</package>`;
-
-    zip.file("content.opf", opfContent);
-
-    const ncxContent = `<?xml version="1.0" encoding="UTF-8"?>
-<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
-  <head>
-    <meta name="dtb:uid" content="${uuid}"/>
-    <meta name="dtb:depth" content="1"/>
-    <meta name="dtb:totalPageCount" content="0"/>
-    <meta name="dtb:maxPageNumber" content="0"/>
-  </head>
-  <docTitle><text>${fullBookTitle}</text></docTitle>
-  <navMap>
-    ${navPoints}
-  </navMap>
-</ncx>`;
-    
-    zip.file("toc.ncx", ncxContent);
+    // Ensure mimetype is first file and STORE
+    if (zip.file("mimetype")) {
+      const mimeBlob = await zip.file("mimetype")!.async("string");
+      zip.remove("mimetype");
+      zip.file("mimetype", mimeBlob, { compression: "STORE" });
+    }
 
     return await zip.generateAsync({ type: "blob" });
   }

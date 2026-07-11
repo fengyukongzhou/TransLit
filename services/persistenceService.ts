@@ -2,13 +2,14 @@
 import { AppConfig, AppStatus, Chapter, ProcessingLog, SessionState } from '../types';
 
 const DB_NAME = 'epub_translator_db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORES = {
   METADATA: 'metadata',
   CHAPTERS: 'chapters',
   IMAGES: 'images',
   LOGS: 'logs',
-  GLOSSARY: 'glossary'
+  GLOSSARY: 'glossary',
+  ORIGINAL_ZIP: 'original_zip'
 };
 
 export class PersistenceService {
@@ -39,6 +40,9 @@ export class PersistenceService {
         }
         if (!db.objectStoreNames.contains(STORES.GLOSSARY)) {
           db.createObjectStore(STORES.GLOSSARY);
+        }
+        if (!db.objectStoreNames.contains(STORES.ORIGINAL_ZIP)) {
+          db.createObjectStore(STORES.ORIGINAL_ZIP);
         }
       };
 
@@ -79,7 +83,7 @@ export class PersistenceService {
     if (!this.db) return;
     
     return new Promise((resolve, reject) => {
-      const activeStores = [STORES.METADATA, STORES.CHAPTERS, STORES.IMAGES, STORES.LOGS, STORES.GLOSSARY]
+      const activeStores = [STORES.METADATA, STORES.CHAPTERS, STORES.IMAGES, STORES.LOGS, STORES.GLOSSARY, STORES.ORIGINAL_ZIP]
         .filter(name => this.db!.objectStoreNames.contains(name));
         
       if (activeStores.length === 0) {
@@ -305,6 +309,25 @@ export class PersistenceService {
 
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error);
+    });
+  }
+
+  async saveOriginalZip(data: ArrayBuffer): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(STORES.ORIGINAL_ZIP, 'readwrite');
+      const store = transaction.objectStore(STORES.ORIGINAL_ZIP);
+      const request = store.put(data, 'archive');
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async loadOriginalZip(): Promise<ArrayBuffer | null> {
+    return new Promise((resolve, reject) => {
+      const store = this.getStore(STORES.ORIGINAL_ZIP);
+      const request = store.get('archive');
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
     });
   }
 }

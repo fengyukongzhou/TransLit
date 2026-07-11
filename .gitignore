@@ -50,3 +50,6 @@ ehthumbs.db
 # Design demos
 design-demos/
 
+# EPUB files
+*.epub
+

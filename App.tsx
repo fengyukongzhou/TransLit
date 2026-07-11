@@ -1,5 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
+import JSZip from 'jszip';
 import { 
   FileCheck, Loader2, Download, AlertTriangle, 
   RefreshCw, Trash2, Save, Info, Plus, X, Eye, Ban, FileCode,
@@ -144,6 +145,7 @@ const App: React.FC = () => {
   const [previewChapter, setPreviewChapter] = useState<Chapter | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]); // Added state for chapters to trigger re-renders
   const [isCleaningGlossary, setIsCleaningGlossary] = useState(false);
+  const [isMissingZip, setIsMissingZip] = useState(false);
   const isCleaningGlossaryRef = useRef(false);
   const pendingGlossaryQueueRef = useRef<Record<string, string>[]>([]);
   
@@ -156,6 +158,9 @@ const App: React.FC = () => {
   const chaptersRef = useRef<Chapter[]>([]);
   const imagesRef = useRef<Record<string, Blob>>({});
   const coverPathRef = useRef<string | undefined>(undefined);
+  const opfPathRef = useRef<string | undefined>(undefined);
+  const opfDirRef = useRef<string | undefined>(undefined);
+  const cssFilesRef = useRef<string[] | undefined>(undefined);
   const activeChapterIndexRef = useRef<number>(-1);
   const activeChunkIndexRef = useRef<number>(0);
 
@@ -193,10 +198,13 @@ const App: React.FC = () => {
                 // Restore data to refs
                 chaptersRef.current = savedChapters.sort((a, b) => a.index - b.index);
                 setChapters(chaptersRef.current); // Sync state
-                // imagesRef.current = savedImages; // Don't load to RAM
-                coverPathRef.current = session.coverPath;
-                
-                // Restore glossary
+                 // imagesRef.current = savedImages; // Don't load to RAM
+                 coverPathRef.current = session.coverPath;
+                 opfPathRef.current = session.opfPath;
+                 opfDirRef.current = session.opfDir;
+                 cssFilesRef.current = session.cssFiles;
+                 
+                 // Restore glossary
                 const savedGlossary = await persistenceService.current.loadGlossary();
                 setGlossaryMap(savedGlossary);
                 setLiveGlossary(glossaryToOutputStr(savedGlossary));
@@ -210,27 +218,8 @@ const App: React.FC = () => {
                 // If it was COMPLETED, restore that
                 if (session.status === AppStatus.COMPLETED) {
                      setStatus(AppStatus.COMPLETED);
-                     addLog("Restored completed session. Regenerating download link...", "info");
-                     
-                     // Regenerate the EPUB blob to get a fresh URL
-                     // We need to load images temporarily for this
-                     try {
-                         const savedImages = await persistenceService.current.loadImages();
-                         const blob = await epubService.current.generateEpub(
-                            savedChapters.filter(c => !c.isSkippable).sort((a, b) => a.index - b.index),
-                            savedImages,
-                            session.fileName.replace('.epub', '') || 'translated_book',
-                            'Chinese (Simplified)',
-                            session.coverPath
-                         );
-                         const url = URL.createObjectURL(blob);
-                         setDownloadUrl(url);
-                         addLog("Download link ready.", "success");
-                     } catch (genError) {
-                         console.error("Failed to regenerate EPUB on restore:", genError);
-                         addLog("Failed to regenerate download link. Please click 'Package Again' or reset.", "error");
-                         setStatus(AppStatus.ERROR); // Fallback so they can try again
-                     }
+                     addLog("Restored completed session. Click 'Package Again' to regenerate the download link.", "info");
+
 
                 } else if (session.status !== AppStatus.IDLE) {
                      setStatus(AppStatus.ERROR); // Use ERROR state to show "Resume" button
@@ -382,8 +371,26 @@ const App: React.FC = () => {
     try {
         setStatus(AppStatus.PARSING);
         addLog("Parsing EPUB and converting XHTML to Markdown...", "process");
-        const { chapters: extractedChapters, images, coverPath } = await epubService.current.parseEpub(file);
+        const { 
+            chapters: extractedChapters, 
+            images, 
+            coverPath,
+            opfPath,
+            opfDir,
+            cssFiles
+        } = await epubService.current.parseEpub(file);
         
+        opfPathRef.current = opfPath;
+        opfDirRef.current = opfDir;
+        cssFilesRef.current = cssFiles;
+
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            await persistenceService.current.saveOriginalZip(arrayBuffer);
+        } catch (zipError) {
+            console.error("Failed to save original ZIP:", zipError);
+        }
+
         chaptersRef.current = extractedChapters;
         setChapters(extractedChapters); // Sync state for UI
         coverPathRef.current = coverPath;
@@ -399,7 +406,10 @@ const App: React.FC = () => {
             progress: 0,
             fileName: file.name,
             coverPath: coverPath,
-            lastUpdated: Date.now()
+            lastUpdated: Date.now(),
+            opfPath,
+            opfDir,
+            cssFiles
         });
 
         addLog(`Extracted ${extractedChapters.length} chapters and ${Object.keys(images).length} images.`, "success");
@@ -731,6 +741,9 @@ const App: React.FC = () => {
           fileName: currentFile.name,
           coverPath: coverPathRef.current,
           lastUpdated: Date.now(),
+          opfPath: opfPathRef.current,
+          opfDir: opfDirRef.current,
+          cssFiles: cssFilesRef.current
       });
   };
 
@@ -818,17 +831,75 @@ const App: React.FC = () => {
     addLog(`Recompiling EPUB...`, "process");
     
     try {
-        // Always filter out manually skipped chapters, even if global smartSkip is off
-        // This ensures the manual "Skip" UI buttons always work
         const chaptersToPack = chaptersList.filter(c => !c.isSkippable);
+        const excludeFileNames = chaptersList
+            .filter(c => c.isSkippable || c.isReference)
+            .map(c => c.fileName);
 
-        const images = await persistenceService.current.loadImages();
+        // Try to get the original ZIP: IndexedDB cache first, then currentFile as fallback
+        let zipBuffer = await persistenceService.current.loadOriginalZip();
+        
+        if (!zipBuffer && currentFile && typeof currentFile.arrayBuffer === 'function') {
+            // currentFile is a real File (not a dummy from session restore) — use it directly
+            addLog("ZIP cache missing, reading from uploaded file...", "info");
+            try {
+                zipBuffer = await currentFile.arrayBuffer();
+                // Re-cache it for next time
+                await persistenceService.current.saveOriginalZip(zipBuffer);
+            } catch (readErr) {
+                console.error("Failed to read currentFile:", readErr);
+            }
+        }
+
+        if (!zipBuffer) {
+            setIsMissingZip(true);
+            throw new Error("Original EPUB cache missing. Please provide the original EPUB file using the button below.");
+        }
+
+        // If opfPath/opfDir are missing (e.g. old session), re-parse from the ZIP to recover them
+        if (opfPathRef.current == null || opfDirRef.current == null) {
+            addLog("Recovering EPUB metadata from ZIP...", "info");
+            const tempZip = await new JSZip().loadAsync(zipBuffer);
+            const containerFile = tempZip.file("META-INF/container.xml");
+            if (containerFile) {
+                const containerXml = await containerFile.async("string");
+                const rootfileMatch = containerXml.match(/full-path="([^"]+)"/);
+                if (rootfileMatch) {
+                    opfPathRef.current = rootfileMatch[1];
+                    const lastSlash = rootfileMatch[1].lastIndexOf('/');
+                    opfDirRef.current = lastSlash >= 0 ? rootfileMatch[1].substring(0, lastSlash + 1) : '';
+                    
+                    // Also recover CSS files from OPF
+                    const opfFile = tempZip.file(opfPathRef.current);
+                    if (opfFile) {
+                        const opfContent = await opfFile.async("string");
+                        const cssMatches = [...opfContent.matchAll(/href="([^"]+\.css)"/g)];
+                        cssFilesRef.current = cssMatches.map(m => opfDirRef.current + m[1]);
+                    }
+                    
+                    // Persist recovered metadata to session
+                    await saveSessionState(AppStatus.PACKAGING);
+                    addLog(`Recovered: opfPath=${opfPathRef.current}, opfDir=${opfDirRef.current}`, "info");
+                }
+            }
+        }
+
+        if (opfPathRef.current == null || opfDirRef.current == null) {
+            throw new Error("Cannot determine EPUB structure (OPF path missing). Please re-upload the original EPUB.");
+        }
+
+        setIsMissingZip(false);
+        const originalZip = await new JSZip().loadAsync(zipBuffer);
         const blob = await epubService.current.generateEpub(
           chaptersToPack, 
-          images, 
+          originalZip,
+          opfPathRef.current,
+          opfDirRef.current,
+          cssFilesRef.current || [],
           fileName.replace('.epub', '') || 'translated_book',
           'Chinese (Simplified)',
-          coverPathRef.current
+          undefined,
+          excludeFileNames
         );
         
         const url = URL.createObjectURL(blob);
@@ -842,6 +913,7 @@ const App: React.FC = () => {
     }
   };
 
+
   const startProcessing = async (mode: 'normal' | 'retry' = 'normal') => {
     if (!currentFile && !chaptersRef.current.length) return;
 
@@ -852,8 +924,26 @@ const App: React.FC = () => {
       if (chaptersRef.current.length === 0 && currentFile) {
         setStatus(AppStatus.PARSING);
         addLog("Parsing EPUB and converting XHTML to Markdown...", "process");
-        const { chapters: extractedChapters, images, coverPath } = await epubService.current.parseEpub(currentFile);
+        const { 
+            chapters: extractedChapters, 
+            images, 
+            coverPath,
+            opfPath,
+            opfDir,
+            cssFiles
+        } = await epubService.current.parseEpub(currentFile);
         
+        opfPathRef.current = opfPath;
+        opfDirRef.current = opfDir;
+        cssFilesRef.current = cssFiles;
+
+        try {
+            const arrayBuffer = await currentFile.arrayBuffer();
+            await persistenceService.current.saveOriginalZip(arrayBuffer);
+        } catch (zipError) {
+            console.error("Failed to save original ZIP in startProcessing:", zipError);
+        }
+
         chaptersRef.current = extractedChapters;
         setChapters(extractedChapters); // Sync state
         coverPathRef.current = coverPath;
@@ -861,7 +951,19 @@ const App: React.FC = () => {
         // Persist initial data
         await persistenceService.current.saveChapters(extractedChapters);
         await persistenceService.current.saveImages(images);
-        await saveSessionState(AppStatus.PARSING);
+        
+        // Save initial session state
+        await persistenceService.current.saveSession({
+            status: AppStatus.PARSING,
+            config,
+            progress: 0,
+            fileName: currentFile.name,
+            coverPath: coverPath,
+            lastUpdated: Date.now(),
+            opfPath,
+            opfDir,
+            cssFiles
+        });
 
         addLog(`Extracted ${extractedChapters.length} chapters and ${Object.keys(images).length} images.`, "success");
         if (coverPath) {
@@ -1160,12 +1262,51 @@ const App: React.FC = () => {
             {status === AppStatus.ERROR && (
                 <div className="bg-white border border-black text-black p-5 rounded-none flex items-start gap-4 text-sm shadow-none font-mono">
                     <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-black" />
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-1.5 w-full">
                         <span className="font-bold text-xs uppercase tracking-widest">Process Error</span>
                         <span className="text-neutral-500 leading-relaxed text-[10px]">
                             The process was interrupted or encountered an error. 
                             Your progress has been saved. Click "{getActionText()}" to continue from the last saved chapter.
                         </span>
+                        {isMissingZip && (
+                            <div className="mt-4 border border-red-500 bg-red-50 p-4 w-full">
+                                <span className="block font-bold text-red-700 text-xs mb-2">ORIGINAL EPUB MISSING</span>
+                                <span className="block text-red-600 text-[10px] mb-3 leading-relaxed">
+                                    We need the original EPUB file to package your translation because the local cache was cleared or exceeded limits. Please provide the original EPUB below to continue packaging.
+                                </span>
+                                <label className="cursor-pointer bg-red-600 hover:bg-red-700 text-white px-4 py-2 text-[10px] uppercase font-bold inline-block border border-red-800 transition-colors">
+                                    Provide Original EPUB
+                                    <input 
+                                        type="file" 
+                                        accept=".epub" 
+                                        className="hidden" 
+                                        onChange={async (e) => {
+                                            const file = e.target.files?.[0];
+                                            if (file) {
+                                                try {
+                                                    // Save the ZIP cache
+                                                    const arrayBuffer = await file.arrayBuffer();
+                                                    await persistenceService.current.saveOriginalZip(arrayBuffer);
+                                                    
+                                                    // Parse EPUB to recover opfPath/opfDir/cssFiles
+                                                    const parsed = await epubService.current.parseEpub(file);
+                                                    opfPathRef.current = parsed.opfPath;
+                                                    opfDirRef.current = parsed.opfDir;
+                                                    cssFilesRef.current = parsed.cssFiles;
+                                                    
+                                                    setCurrentFile(file);
+                                                    setIsMissingZip(false);
+                                                    addLog("Original EPUB cache restored with full metadata. You can now try packaging again.", "success");
+                                                } catch (err) {
+                                                    console.error("Failed to restore zip", err);
+                                                    addLog("Failed to restore EPUB cache.", "error");
+                                                }
+                                            }
+                                        }} 
+                                    />
+                                </label>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

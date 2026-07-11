@@ -32,6 +32,9 @@ export interface SessionState {
   fileName: string;
   coverPath?: string;
   lastUpdated: number;
+  opfPath?: string;
+  opfDir?: string;
+  cssFiles?: string[];
 }
 
 export enum AppStatus {
