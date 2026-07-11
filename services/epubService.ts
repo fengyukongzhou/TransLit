@@ -765,7 +765,7 @@ export class EpubService {
       zip.file(opfPath, opfContent);
     }
 
-    // 1b. Remove excluded chapters (skipped + reference/footnote pages) from OPF and ZIP
+    // 1b. Remove excluded chapters (skipped + reference/footnote pages) from OPF, ZIP, and TOC
     if (excludeFileNames && excludeFileNames.length > 0) {
       const currentOpfFile = zip.file(opfPath);
       if (currentOpfFile) {
@@ -776,33 +776,126 @@ export class EpubService {
 
         // Find manifest item IDs whose href matches excluded fileNames
         const idsToRemove = new Set<string>();
-        const manifestItems = opfDoc.querySelectorAll("manifest > item");
-        for (const item of manifestItems) {
-          const href = item.getAttribute("href");
-          const id = item.getAttribute("id");
-          if (href && id && excludeSet.has(href)) {
-            idsToRemove.add(id);
-            item.remove();
-            // Delete the physical XHTML file from ZIP
-            const fullPath = opfDir + href;
-            if (zip.file(fullPath)) {
-              zip.remove(fullPath);
+        let ncxHref: string | null = null;
+        let navHref: string | null = null;
+
+        for (const item of Array.from(opfDoc.querySelectorAll("*"))) {
+          if (item.localName === "item") {
+            const href = item.getAttribute("href");
+            const id = item.getAttribute("id");
+            const properties = item.getAttribute("properties");
+            
+            if (href && id && excludeSet.has(href)) {
+              idsToRemove.add(id);
+              item.remove();
+              // Delete the physical XHTML file from ZIP
+              const fullPath = opfDir + href;
+              if (zip.file(fullPath)) {
+                zip.remove(fullPath);
+              }
+            }
+            
+            // Identify EPUB3 NAV
+            if (properties && properties.split(/\s+/).includes("nav")) {
+              navHref = href;
             }
           }
         }
 
         // Remove corresponding <itemref> entries from <spine>
-        const spineRefs = opfDoc.querySelectorAll("spine > itemref");
-        for (const ref of spineRefs) {
-          const idref = ref.getAttribute("idref");
-          if (idref && idsToRemove.has(idref)) {
-            ref.remove();
+        let tocId: string | null = null;
+        for (const ref of Array.from(opfDoc.querySelectorAll("*"))) {
+          if (ref.localName === "spine") {
+            tocId = ref.getAttribute("toc");
+          } else if (ref.localName === "itemref") {
+            const idref = ref.getAttribute("idref");
+            if (idref && idsToRemove.has(idref)) {
+              ref.remove();
+            }
           }
         }
 
-        // Serialize back and write
+        // Identify EPUB2 NCX
+        if (tocId) {
+          for (const item of Array.from(opfDoc.querySelectorAll("*"))) {
+            if (item.localName === "item" && item.getAttribute("id") === tocId) {
+              ncxHref = item.getAttribute("href");
+              break;
+            }
+          }
+        }
+
+        // Helper to check if a href points to an excluded file
+        const isExcluded = (link: string | null) => {
+          if (!link) return false;
+          let baseLink = '';
+          try {
+             baseLink = decodeURIComponent(link.split('#')[0]);
+          } catch(e) {
+             baseLink = link.split('#')[0];
+          }
+          return Array.from(excludeSet).some(ex => {
+             let decodedEx = ex;
+             try { decodedEx = decodeURIComponent(ex); } catch(e) {}
+             if (decodedEx === baseLink) return true;
+             if (decodedEx.endsWith('/' + baseLink)) return true;
+             if (baseLink.endsWith('/' + decodedEx)) return true;
+             return false;
+          });
+        };
+
+        // Serialize OPF back and write
         const serializer = new XMLSerializer();
         zip.file(opfPath, serializer.serializeToString(opfDoc));
+
+        // Clean up EPUB2 NCX
+        if (ncxHref) {
+          const ncxPath = opfDir + ncxHref;
+          const ncxFile = zip.file(ncxPath);
+          if (ncxFile) {
+            const ncxContent = await ncxFile.async("string");
+            const ncxDoc = parser.parseFromString(ncxContent, "application/xml");
+            for (const el of Array.from(ncxDoc.querySelectorAll("*"))) {
+              if (el.localName === 'navPoint') {
+                let contentNode: Element | null = null;
+                for (const child of Array.from(el.children)) {
+                  if (child.localName === 'content') {
+                    contentNode = child;
+                    break;
+                  }
+                }
+                if (contentNode && isExcluded(contentNode.getAttribute("src"))) {
+                  el.remove();
+                }
+              }
+            }
+            zip.file(ncxPath, serializer.serializeToString(ncxDoc));
+          }
+        }
+
+        // Clean up EPUB3 NAV
+        if (navHref) {
+          const navPath = opfDir + navHref;
+          const navFile = zip.file(navPath);
+          if (navFile) {
+            const navContent = await navFile.async("string");
+            const navDoc = parser.parseFromString(navContent, "application/xml");
+            for (const el of Array.from(navDoc.querySelectorAll("*"))) {
+              if (el.localName === 'a') {
+                if (isExcluded(el.getAttribute("href"))) {
+                  let li: Element | null = el;
+                  while (li && li.localName !== 'li') {
+                    li = li.parentElement;
+                  }
+                  if (li) {
+                    li.remove();
+                  }
+                }
+              }
+            }
+            zip.file(navPath, serializer.serializeToString(navDoc));
+          }
+        }
       }
     }
 
