@@ -538,9 +538,7 @@ const App: React.FC = () => {
             startIndex = firstRetryIndex;
         }
         
-        const initialGlossaryForChapter = (startIndex > 0 && chapter.chunkGlossaries && chapter.chunkGlossaries[startIndex - 1]) 
-            ? chapter.chunkGlossaries[startIndex - 1] 
-            : currentGlossary;
+        const initialGlossaryForChapter = currentGlossary;
 
         const result = await aiService.translateContent(
             chapter.markdown, 
