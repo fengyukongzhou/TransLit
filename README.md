@@ -39,6 +39,12 @@
   - 自动抽取、记录章节中的生僻词与专有名词。
   - 支持按需翻译，同时结合上下文对未来文本进行词频和重要度匹配，动态过滤冗余术语，保证术语库的紧凑与精准。
 
+## 📖 电子书脚注预处理 (AI Agent 工作流)
+
+如果您的 EPUB 书籍含有非常复杂的脚注（例如跨文件链接、非标准跳转或特殊排版），建议在翻译前使用配套的 AI Agent 技能进行一键洗排。
+- **Agent 预处理技能仓库**：[translit-epub-prep](https://github.com/fengyukongzhou/translit-epub-prep)
+- **洗排原理**：该技能指导 AI Agent 将跨文件的复杂脚注自动抽取并挂载到对应正文段落下方，重构为符合标准的 EPUB3 同页脚注格式。TransLit 会自动将其转换为原生 Markdown 脚注进行翻译，翻译后将完美保留双向跳转链接。
+
 ## 🎨 设计美学：Swiss Monochrome
 
 项目整体界面致敬了经典的瑞士现代主义排版与 e-ink 电子墨水屏美学：
@@ -117,6 +123,12 @@ For the author's thoughts on TransLit's development and the evolution of AI tran
 - 🗂️ **Glossary Management & Smart Cleanup**
   - Automatically extracts and logs rare words and proper nouns during translation.
   - Evaluates terms against future text, dynamically filtering out redundant glossary records to keep the database clean and efficient.
+
+## 📖 EPUB Footnote Preprocessing (AI Agent Workflow)
+
+If your EPUB book contains highly complex footnotes (e.g., cross-file links, non-standard redirects, or irregular typesetting), we recommend preprocessing it using our dedicated AI Agent Skill before translating.
+- **Agent Preprocessing Repository**: [translit-epub-prep](https://github.com/fengyukongzhou/translit-epub-prep)
+- **How it works**: The Skill instructs the AI Agent to automatically extract cross-file footnotes and append them to the bottom of the referring chapters, restructuring them into standard EPUB3 same-page footnotes. TransLit then automatically converts these into standard Markdown footnotes during translation, maintaining perfect bidirectional jumps.
 
 ## 🎨 Design Philosophy: Swiss Monochrome
 

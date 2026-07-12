@@ -13,6 +13,37 @@ const turndownService = new TurndownService({
   codeBlockStyle: 'fenced'
 });
 
+// Custom Rule: Convert EPUB3 footnote links to Markdown footnotes
+turndownService.addRule('epub-noteref', {
+  filter: function(node) {
+    return node.nodeName === 'A' && (node.getAttribute('epub:type') === 'noteref' || node.classList.contains('noteref'));
+  },
+  replacement: function(content, node) {
+    const href = node.getAttribute('href');
+    if (href && href.startsWith('#')) {
+      const id = href.substring(1);
+      return `[^${id}]`;
+    }
+    return content;
+  }
+});
+
+// Custom Rule: Convert EPUB3 footnote definitions to Markdown footnotes
+turndownService.addRule('epub-footnote-def', {
+  filter: function(node) {
+    return node.getAttribute('epub:type') === 'footnote' || node.classList.contains('footnote') || node.classList.contains('footnote-def');
+  },
+  replacement: function(content, node) {
+    const id = node.getAttribute('id');
+    if (id) {
+      // Clean up internal breaks to keep the definition block together
+      const cleanContent = content.trim().replace(/\n+/g, ' ');
+      return `\n\n[^${id}]: ${cleanContent}\n\n`;
+    }
+    return content;
+  }
+});
+
 // Custom Rule: Flatten Headings
 turndownService.addRule('flattenHeader', {
   filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
@@ -368,7 +399,6 @@ export class EpubService {
 
     const chapters: Chapter[] = [];
     const images: Record<string, Blob> = {};
-    const linkedFootnoteFiles = new Set<string>();
 
     for (const [path, fileObj] of Object.entries(loadedZip.files)) {
       if (path.match(/\.(png|jpe?g|gif|svg|webp)$/i)) {
@@ -438,39 +468,9 @@ export class EpubService {
         const isSkippable = /^(copyright|colophon|imprint|legal|cover|title\s?page|table\s?of\s?contents|^toc$|dedication)/i.test(lowerTitle)
           || /(copyright|cover|title[\-_]?page|toc|contents)\.(xhtml|html|xml)$/i.test(lowerHref);
 
-        // Expanded isReference to match footnotes, _fn123, endnotes etc.
-        const isReference = /^(references|bibliography|works\s?cited|sources|credits|notes|endnotes|footnotes)/i.test(lowerTitle)
-          || /(references|bibliography|notes|foot|footnote|endnote|_fn\d+)\.(xhtml|html|xml)$/i.test(lowerHref)
-          || /(references|bibliography|notes|foot|footnote|endnote|_fn\d+)/i.test(lowerHref);
-
-        // Collect links that look like footnotes to build linkedFootnoteFiles
-        const links = doc.querySelectorAll('a[href]');
-        for (let i = 0; i < links.length; i++) {
-          const a = links[i];
-          const hrefAttr = a.getAttribute('href');
-          const text = a.textContent?.trim() || "";
-          
-          const isFootnoteText = /^\d+$/.test(text)
-                               || /^[*†‡§¶‖\d]+$/.test(text)
-                               || /^[ivxlc\d]+$/i.test(text);
-                               
-          if (hrefAttr && isFootnoteText) {
-            const url = hrefAttr;
-            if (!url.startsWith('http') && !url.startsWith('//')) {
-              const filePart = url.includes('#') ? url.split('#')[0] : url;
-              if (filePart) {
-                const currentDir = href.substring(0, href.lastIndexOf('/') + 1);
-                const parts = (currentDir + filePart).split('/');
-                const resolved: string[] = [];
-                for (const p of parts) {
-                  if (p === '..') resolved.pop();
-                  else if (p !== '.' && p !== '') resolved.push(p);
-                }
-                linkedFootnoteFiles.add(resolved.join('/'));
-              }
-            }
-          }
-        }
+        const fileNameBase = lowerHref.split('/').pop() || "";
+        const isReference = /^(references|bibliography|works\s?cited|sources|credits|notes|endnotes|footnotes)(\s|$)/i.test(lowerTitle)
+          || /^(references|bibliography|notes|footnotes?|endnotes?|_fn\d+)[-_]?\d*\.(xhtml|html|xml)$/i.test(fileNameBase);
 
         chapters.push({
           id,
@@ -484,239 +484,6 @@ export class EpubService {
           isTocPoint
         });
       }
-    }
-
-    // Pass 1.5: Mark chapters as reference if they are linked as footnotes and are not TOC points
-    for (const ch of chapters) {
-      if (linkedFootnoteFiles.has(ch.fileName) && !ch.isTocPoint) {
-        ch.isReference = true;
-      }
-    }
-
-    // Build Footnote Content Map (with DOM Closest & Return-Link Stripping heuristics)
-    const footnoteContentMap: Record<string, string> = {};
-
-    for (const chapter of chapters) {
-      const doc = parser.parseFromString(chapter.content, "text/html");
-      const textLen = doc.body.textContent?.trim().length || 0;
-      
-      // Heuristic fallback for Calibre fragmented footnote pages (short page with link)
-      const isSuspiciousFootnotePage = textLen > 0 && textLen < 1500 && doc.querySelectorAll('a[href]').length > 0;
-
-      if (chapter.isReference || isSuspiciousFootnotePage || doc.querySelectorAll('.footnotes, [epub\\:type="footnotes"]').length > 0) {
-        if (isSuspiciousFootnotePage && !chapter.isSkippable) {
-          chapter.isReference = true;
-        }
-
-        const elementsWithId = doc.querySelectorAll('[id]');
-        for (const el of elementsWithId) {
-          const id = el.getAttribute('id');
-          if (!id) continue;
-          
-          const key = `${chapter.fileName}#${id}`;
-          
-          // 1. Find block boundary (drill up to block element)
-          const blockTags = ['P', 'LI', 'DIV', 'ASIDE', 'BLOCKQUOTE', 'SECTION', 'TR', 'DD', 'DT', 'FIGURE'];
-          let boundary = el;
-          while (boundary.parentElement && !blockTags.includes(boundary.tagName.toUpperCase()) && boundary.parentElement.tagName.toUpperCase() !== 'BODY') {
-            boundary = boundary.parentElement;
-          }
-
-          // 2. Collect HTML until next valid footnote ID
-          const tempDiv = document.createElement('div');
-          tempDiv.appendChild(boundary.cloneNode(true));
-          
-          let curr = boundary.nextElementSibling;
-          while (curr) {
-            let hasValidNextFootnote = false;
-            // A valid footnote boundary is an element with an ID that also has text content
-            if (curr.id && curr.textContent?.trim().length > 0) {
-              hasValidNextFootnote = true;
-            } else {
-              const idsInCurr = curr.querySelectorAll('[id]');
-              for (let i = 0; i < idsInCurr.length; i++) {
-                if (idsInCurr[i].textContent?.trim().length > 0) {
-                  hasValidNextFootnote = true;
-                  break;
-                }
-              }
-            }
-            
-            if (hasValidNextFootnote) {
-              break;
-            }
-            
-            tempDiv.appendChild(curr.cloneNode(true));
-            curr = curr.nextElementSibling;
-          }
-
-          // 3. Strip return links
-          const links = tempDiv.querySelectorAll('a');
-          for (let i = 0; i < links.length; i++) {
-            const a = links[i];
-            const text = a.textContent || '';
-            const epubType = a.getAttribute('epub:type') || '';
-            const hrefAttr = a.getAttribute('href') || '';
-            
-            const isBacklinkKeyword = /↩|⬆|↑|←|back to text/i.test(text);
-            const isEpubBacklink = epubType === 'backlink';
-            const isTargetingOtherFile = hrefAttr && !hrefAttr.startsWith('#');
-            
-            if (isBacklinkKeyword || isEpubBacklink || (isTargetingOtherFile && /^\s*[\d\[\]]+\s*$/.test(text))) {
-              a.remove();
-            }
-          }
-
-          let mdContent = turndownService.turndown(tempDiv.innerHTML).trim();
-          
-          // Use <br><br> for multi-paragraph footnotes to ensure they stay on a single Markdown definition line
-          mdContent = mdContent.replace(/\n\n+/g, '<br><br>');
-          // Clean prefix (numbers or letters)
-          mdContent = mdContent.replace(/^[a-z0-9]+[\.\)]\s*/i, '');
-
-          if (mdContent.length > 0) {
-            footnoteContentMap[key] = mdContent;
-          }
-        }
-
-        // Fallback: if no [id] elements found, treat entire body as a single footnote entry
-        // (common in Calibre PDF-to-EPUB where footnote overflow pages have no anchors)
-        if (elementsWithId.length === 0 && chapter.isReference) {
-          const tempDiv = document.createElement('div');
-          tempDiv.innerHTML = doc.body.innerHTML;
-
-          // Strip return links
-          const links = tempDiv.querySelectorAll('a');
-          for (let i = 0; i < links.length; i++) {
-            const a = links[i];
-            const text = a.textContent || '';
-            const epubType = a.getAttribute('epub:type') || '';
-            const hrefAttr = a.getAttribute('href') || '';
-            
-            const isBacklinkKeyword = /↩|⬆|↑|←|back to text/i.test(text);
-            const isEpubBacklink = epubType === 'backlink';
-            const isTargetingOtherFile = hrefAttr && !hrefAttr.startsWith('#');
-            
-            if (isBacklinkKeyword || isEpubBacklink || (isTargetingOtherFile && /^\s*[\d\[\]]+\s*$/.test(text))) {
-              a.remove();
-            }
-          }
-
-          let mdContent = turndownService.turndown(tempDiv.innerHTML).trim();
-          mdContent = mdContent.replace(/\n\n+/g, '<br><br>');
-          mdContent = mdContent.replace(/^[a-z0-9]+[\.\)]\s*/i, '');
-
-          if (mdContent.length > 0) {
-            // Key by filename only (no fragment) so fragment-less links can match
-            footnoteContentMap[chapter.fileName] = mdContent;
-          }
-        }
-      }
-    }
-
-    // Pass 2: Inline Footnote Links into Markdown
-    const inlineFootnotes = (
-      markdown: string,
-      currentFileName: string,
-      fnContentMap: Record<string, string>
-    ): string => {
-      let fnCounter = 0;
-      const linkRegex = /\[([^\]]*)\]\(([^)]+)\)/g;
-      const replacements: Array<{
-        original: string;
-        replacement: string;
-        definition: string;
-        index: number;
-      }> = [];
-
-      let match;
-      while ((match = linkRegex.exec(markdown)) !== null) {
-        const fullMatch = match[0];
-        const linkText = match[1];
-        const url = match[2];
-
-        // Support both fragment links (file.html#anchor) and fragment-less links (file.html)
-        let filePart = '';
-        let anchor = '';
-        if (url.includes('#')) {
-          [filePart, anchor] = url.split('#');
-        } else {
-          filePart = url;
-        }
-
-        const isFootnoteText = /^\d+$/.test(linkText.trim())
-                             || /^[*†‡§¶‖]+$/.test(linkText.trim())
-                             || /^[ivxlc]+$/i.test(linkText.trim());
-        if (!isFootnoteText) continue;
-
-        let lookupKey = '';
-        if (filePart) {
-          const currentDir = currentFileName.substring(0, currentFileName.lastIndexOf('/') + 1);
-          const parts = (currentDir + filePart).split('/');
-          const resolved: string[] = [];
-          for (const p of parts) {
-            if (p === '..') resolved.pop();
-            else if (p !== '.' && p !== '') resolved.push(p);
-          }
-          lookupKey = anchor ? `${resolved.join('/')}#${anchor}` : resolved.join('/');
-        } else {
-          lookupKey = `${currentFileName}#${anchor}`;
-        }
-
-        // Try exact key first, then fallback to filename-only key (for no-ID footnote files)
-        let content = fnContentMap[lookupKey];
-        if (!content && anchor && filePart) {
-          const currentDir = currentFileName.substring(0, currentFileName.lastIndexOf('/') + 1);
-          const parts = (currentDir + filePart).split('/');
-          const resolved: string[] = [];
-          for (const p of parts) {
-            if (p === '..') resolved.pop();
-            else if (p !== '.' && p !== '') resolved.push(p);
-          }
-          content = fnContentMap[resolved.join('/')];
-        }
-        if (content) {
-          fnCounter++;
-          replacements.push({
-            original: fullMatch,
-            replacement: `[^${fnCounter}]`,
-            definition: `[^${fnCounter}]: ${content}`,
-            index: match.index
-          });
-        }
-      }
-
-      if (replacements.length === 0) return markdown;
-
-      let result = markdown;
-      for (const r of [...replacements].reverse()) {
-        result = result.substring(0, r.index)
-               + r.replacement
-               + result.substring(r.index + r.original.length);
-      }
-
-      const finalParagraphs = result.split('\n\n');
-      const outputParagraphs: string[] = [];
-      const defMap = Object.fromEntries(replacements.map(r => [r.replacement, r.definition]));
-      const usedDefs = new Set<string>();
-
-      for (const para of finalParagraphs) {
-        outputParagraphs.push(para);
-        const fnRefs = para.match(/\[\^\d+\]/g) || [];
-        for (const ref of fnRefs) {
-          if (defMap[ref] && !usedDefs.has(ref)) {
-            outputParagraphs.push(defMap[ref]);
-            usedDefs.add(ref);
-          }
-        }
-      }
-
-      return outputParagraphs.join('\n\n');
-    };
-
-    for (const chapter of chapters) {
-      if (chapter.isReference || chapter.isSkippable || !chapter.markdown) continue;
-      chapter.markdown = inlineFootnotes(chapter.markdown, chapter.fileName, footnoteContentMap);
     }
 
     return { 
@@ -855,7 +622,7 @@ export class EpubService {
           if (ncxFile) {
             const ncxContent = await ncxFile.async("string");
             const ncxDoc = parser.parseFromString(ncxContent, "application/xml");
-            for (const el of Array.from(ncxDoc.querySelectorAll("*"))) {
+            for (const el of Array.from(ncxDoc.querySelectorAll("*")).reverse()) {
               if (el.localName === 'navPoint') {
                 let contentNode: Element | null = null;
                 for (const child of Array.from(el.children)) {
@@ -865,6 +632,11 @@ export class EpubService {
                   }
                 }
                 if (contentNode && isExcluded(contentNode.getAttribute("src"))) {
+                  // Rescue children navPoints before removing the parent
+                  const childNavPoints = Array.from(el.children).filter(c => c.localName === 'navPoint');
+                  for (const child of childNavPoints) {
+                    if (el.parentElement) el.parentElement.insertBefore(child, el);
+                  }
                   el.remove();
                 }
               }
@@ -880,7 +652,7 @@ export class EpubService {
           if (navFile) {
             const navContent = await navFile.async("string");
             const navDoc = parser.parseFromString(navContent, "application/xml");
-            for (const el of Array.from(navDoc.querySelectorAll("*"))) {
+            for (const el of Array.from(navDoc.querySelectorAll("*")).reverse()) {
               if (el.localName === 'a') {
                 if (isExcluded(el.getAttribute("href"))) {
                   let li: Element | null = el;
@@ -888,6 +660,14 @@ export class EpubService {
                     li = li.parentElement;
                   }
                   if (li) {
+                    // Rescue child <li> elements from nested <ol> before removing the parent <li>
+                    const childOls = Array.from(li.children).filter(c => c.localName === 'ol');
+                    for (const ol of childOls) {
+                      const childLis = Array.from(ol.children).filter(c => c.localName === 'li');
+                      for (const childLi of childLis) {
+                        if (li.parentElement) li.parentElement.insertBefore(childLi, li);
+                      }
+                    }
                     li.remove();
                   }
                 }
@@ -923,7 +703,10 @@ export class EpubService {
       if (!originalXhtmlFile) continue;
 
       const originalXhtml = await originalXhtmlFile.async("string");
-      const contentToUse = ch.proofreadMarkdown || ch.translatedMarkdown || ch.markdown || "";
+      let contentToUse = ch.proofreadMarkdown || ch.translatedMarkdown || ch.markdown || "";
+
+      // Fix full-width colon and spacing in footnote definitions caused by AI translation
+      contentToUse = contentToUse.replace(/^[ \t]*\[\^([^\]]+)\][：:][ \t]*/gm, '[^$1]: ');
 
       // Structure-aware line joining: keep table rows and list items
       // on consecutive lines (\n), only separate paragraphs with \n\n
