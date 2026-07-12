@@ -12,6 +12,7 @@ import {
     FMT_ONE_STEP_NO_GLOSSARY
 } from "../prompts";
 import { parseGlossaryStr, glossaryToOutputStr } from "../utils/glossaryUtils";
+import Fuse from 'fuse.js';
 
 export class AiService {
   // Safe chunk size to avoid context limits (approx 3000 chars)
@@ -272,6 +273,14 @@ export class AiService {
     const lowerText = text.toLowerCase();
     const entries = Object.entries(glossaryMap);
 
+    // Extract all words for Fuse.js
+    const textWords = text.match(/\p{L}+/gu) || [];
+    const fuse = new Fuse(textWords, {
+      includeScore: true,
+      threshold: 0.3,
+      ignoreLocation: true
+    });
+
     entries.forEach(([key, value]) => {
       const containsChinese = /[\u4e00-\u9fa5]/.test(key);
       const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -282,15 +291,21 @@ export class AiService {
         const lowerKey = key.toLowerCase();
         count = text.toLowerCase().split(lowerKey).length - 1;
       } else {
-        try {
-          // Use global regex to count word boundary matches for non-Chinese text
-          const regex = new RegExp(`\\b${escapedKey}\\b`, 'gi');
-          const matches = lowerText.match(regex);
-          count = matches ? matches.length : 0;
-        } catch (e) {
-          // Fallback if regex fails for some reason
-          const lowerKey = key.toLowerCase();
-          count = text.toLowerCase().split(lowerKey).length - 1;
+        const keyLength = key.length;
+        if (keyLength <= 3) {
+          // Strict regex matching for very short words to prevent over-matching (e.g., 'to' matching 'tool')
+          try {
+            const regex = new RegExp(`\\b${escapedKey}\\b`, 'gi');
+            const matches = lowerText.match(regex);
+            count = matches ? matches.length : 0;
+          } catch (e) {
+            const lowerKey = key.toLowerCase();
+            count = text.toLowerCase().split(lowerKey).length - 1;
+          }
+        } else {
+          // Fuzzy search for inflected proper nouns and longer words
+          const results = fuse.search(key);
+          count = results.length;
         }
       }
 

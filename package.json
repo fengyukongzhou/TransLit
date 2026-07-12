@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "dompurify": "^3.3.1",
+    "fuse.js": "^7.4.2",
+    "jsdom": "^29.1.1",
     "jszip": "^3.10.1",
     "katex": "0.16.9",
     "lucide-react": "^0.562.0",
