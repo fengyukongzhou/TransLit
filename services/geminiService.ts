@@ -266,6 +266,9 @@ export class AiService {
 
   /**
    * Filters a glossary map based on whether terms appear in the text.
+   * Uses prefix/suffix substring matching for CJK keys and word-splitting
+   * for multi-word English keys, so partial name references (e.g., given name
+   * only when full name is in glossary) are correctly matched.
    * @param minOccurrences Minimum number of times the term must appear to be kept.
    */
   public filterGlossaryByInclusion(glossaryMap: Record<string, string>, text: string, minOccurrences: number = 1): Record<string, string> {
@@ -282,14 +285,39 @@ export class AiService {
     });
 
     entries.forEach(([key, value]) => {
-      const containsChinese = /[\u4e00-\u9fa5]/.test(key);
+      // Detect CJK scripts (Chinese, Japanese Kanji/Hiragana/Katakana, Korean Hangul)
+      // These scripts don't use spaces between words, so \b word boundaries won't work.
+      const isCJK = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/.test(key);
       const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       
       let count = 0;
-      if (containsChinese) {
-        // String splitting method to count occurrences in Chinese
+      if (isCJK) {
+        // Substring inclusion for CJK (no word boundaries needed)
         const lowerKey = key.toLowerCase();
-        count = text.toLowerCase().split(lowerKey).length - 1;
+        count = lowerText.split(lowerKey).length - 1;
+
+        // Substring fallback: check if any prefix or suffix (≥2 chars) of
+        // the key appears in the text. This catches partial name references
+        // e.g., "太郎" matching glossary key "山田太郎".
+        if (count === 0 && key.length >= 3) {
+          const lowerKeyFull = key.toLowerCase();
+          for (let len = 2; len < lowerKeyFull.length; len++) {
+            // Check prefixes of this length
+            const prefix = lowerKeyFull.substring(0, len);
+            if (lowerText.includes(prefix)) {
+              count = 1;
+              console.log(`[Glossary] 🔗 Term "${key}" matched via prefix "${prefix}".`);
+              break;
+            }
+            // Check suffixes of this length
+            const suffix = lowerKeyFull.substring(lowerKeyFull.length - len);
+            if (lowerText.includes(suffix)) {
+              count = 1;
+              console.log(`[Glossary] 🔗 Term "${key}" matched via suffix "${suffix}".`);
+              break;
+            }
+          }
+        }
       } else {
         const keyLength = key.length;
         if (keyLength <= 3) {
@@ -300,17 +328,40 @@ export class AiService {
             count = matches ? matches.length : 0;
           } catch (e) {
             const lowerKey = key.toLowerCase();
-            count = text.toLowerCase().split(lowerKey).length - 1;
+            count = lowerText.split(lowerKey).length - 1;
           }
         } else {
           // Fuzzy search for inflected proper nouns and longer words
           const results = fuse.search(key);
           count = results.length;
         }
+
+        // Word-splitting fallback for multi-word English keys:
+        // e.g., "Pale King" → check "Pale" and "King" individually.
+        if (count === 0) {
+          const words = key.split(/\s+/).filter(w => w.length >= 3);
+          if (words.length > 1) {
+            for (const word of words) {
+              try {
+                const wordEscaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(`\\b${wordEscaped}\\b`, 'gi');
+                if (regex.test(lowerText)) {
+                  count = 1;
+                  console.log(`[Glossary] 🔗 Term "${key}" matched via word "${word}".`);
+                  break;
+                }
+              } catch (e) {
+                // Skip this word on regex error
+              }
+            }
+          }
+        }
       }
 
       if (count >= minOccurrences) {
-        console.log(`[Glossary] ✅ Term "${key}" kept (found ${count} times).`);
+        if (count > 0 && !filteredRecord[key]) {
+          console.log(`[Glossary] ✅ Term "${key}" kept (found ${count} times).`);
+        }
         filteredRecord[key] = value;
       } else {
         console.log(`[Glossary] 🗑️ Term "${key}" dropped (found ${count} times, need ${minOccurrences}).`);
