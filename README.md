@@ -1,4 +1,4 @@
-﻿# TransLit 📖
+# TransLit 📖
 
 [![Vite](https://img.shields.io/badge/Vite-6.x-646CFF.svg?style=flat-square&logo=vite)](https://vite.dev/)
 [![React](https://img.shields.io/badge/React-19.x-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
@@ -25,12 +25,12 @@
 
 - 🔌 **BYOK (Bring Your Own Key) 模式**
   - 无需搭建中转服务器，API 接口由浏览器直连调用。
-  - 用户的 API Key、Base URL 等配置会缓存到浏览器的 localStorage 中。在点击 “Reset” 重置书籍和日志进度时，个人的 API 密钥等配置不会被清理。
+  - 用户的 API Key、Base URL 等配置会缓存到浏览器的 `localStorage` 中。在点击 “Reset” 重置书籍和日志进度时，个人的 API 密钥等配置不会被清理。
 - 📖 **EPUB 解析与重新打包**
-  - 基于 jszip 库解压并解析 EPUB，提取 content.opf 以及 XHTML 章节内容。
-  - 使用 	urndown 库将 XHTML 转换为 Markdown 格式提供给大模型，保证格式、加粗、排版及注释等在翻译后得到保留。
+  - 基于 `jszip` 库解压并解析 EPUB，提取 `content.opf` 以及 XHTML 章节内容。
+  - 使用 `turndown` 库将 XHTML 转换为 Markdown 格式提供给大模型，保证格式、加粗、排版及注释等在翻译后得到保留。
 - 💾 **持久化 (断点续传)**
-  - 基于浏览器 IndexedDB 存储当前的会话状态、章节解析内容、图片资产、运行中的日志，以及生成的术语表。
+  - 基于浏览器 `IndexedDB` 存储当前的会话状态、章节解析内容、图片资产、运行中的日志，以及生成的术语表。
   - 即使网络中断、电脑死机或页面刷新，也能断点恢复，继续之前的翻译进度。
 - 🤖 **双 Pass 翻译与校对**
   - **分包处理**：自动按约 3000 字进行拆包。
@@ -51,7 +51,7 @@
 项目界面参考了瑞士现代主义排版与 e-ink 电子墨水屏美学：
 - **留白与黑白对比**：使用粗体无衬线等宽字体（Geist Mono）与网格线条。
 - **黑白交互**：所有输入框、开关按钮、标签和控制台均由黑白两色构成。
-- **Logo**：左上角使用从 logo.png 提取并裁剪的黑白软盘 SVG 矢量 Logo，与页面融合。
+- **Logo**：左上角使用从 `logo.png` 提取并裁剪的黑白软盘 SVG 矢量 Logo，与页面融合。
 
 ## 🛠️ 本地运行指南
 
@@ -59,26 +59,26 @@
 - 本地需要安装 [Node.js](https://nodejs.org/) (推荐 v18+)
 
 ### 1. 安装依赖
-`ash
+```bash
 npm install
-`
+```
 
 ### 2. 配置环境变量 (可选)
-您可以在项目根目录中复制或创建 .env.local 文件来预填默认 API Key：
-`env
+您可以在项目根目录中复制或创建 `.env.local` 文件来预填默认 API Key：
+```env
 GEMINI_API_KEY=您的Gemini密钥
-`
+```
 *注：在 UI 界面中输入的 Key 优先级最高，且会自动记录至 LocalStorage。*
 
 ### 3. 运行开发服务器
-`ash
+```bash
 npm run dev
-`
-启动后在浏览器打开终端提示的地址（默认 http://localhost:3000）即可。
+```
+启动后在浏览器打开终端提示的地址（默认 `http://localhost:3000`）即可。
 
 ## 📦 项目架构简析
 
-`
+```
 TransLit/
 ├── components/
 │   ├── FileUpload.tsx      # 电子书拖拽上传组件
@@ -91,7 +91,7 @@ TransLit/
 ├── index.html              # HTML 骨架，配置全局 Geist Mono 字体与滚动条样式
 ├── logo.svg                # 软盘矢量 Logo
 └── package.json            # 项目依赖声明
-`
+```
 
 ---
 
@@ -111,12 +111,12 @@ For the author's thoughts on TransLit's development and the evolution of AI tran
 
 - 🔌 **BYOK (Bring Your Own Key) Mode**
   - No server-side setup required; API calls are sent from the browser.
-  - User settings (API Key, Base URL, etc.) are cached in the browser's localStorage. Resetting the translation progress will not clear your API keys.
+  - User settings (API Key, Base URL, etc.) are cached in the browser's `localStorage`. Resetting the translation progress will not clear your API keys.
 - 📖 **EPUB Parsing & Re-packaging**
-  - Unzips and parses EPUB using the jszip library to extract XHTML chapters and metadata.
-  - Converts XHTML to Markdown using 	urndown before sending it to LLMs, ensuring formatting (bold, links, lists, notes) is preserved in the translated output.
+  - Unzips and parses EPUB using the `jszip` library to extract XHTML chapters and metadata.
+  - Converts XHTML to Markdown using `turndown` before sending it to LLMs, ensuring formatting (bold, links, lists, notes) is preserved in the translated output.
 - 💾 **Persistence (Resumable Progress)**
-  - Stores session states, chapter extractions, images, logs, and generated glossary terms in the browser's IndexedDB.
+  - Stores session states, chapter extractions, images, logs, and generated glossary terms in the browser's `IndexedDB`.
   - Resumes translation progress after network disconnections, browser crashes, or page reloads.
 - 🤖 **Two-Pass Translation & Proofreading**
   - **Chunk Splitter**: Splits chapters into chunks of ~3000 words.
@@ -145,22 +145,22 @@ The interface references Swiss typography and e-ink aesthetics:
 - [Node.js](https://nodejs.org/) (v18+ recommended) installed locally.
 
 ### 1. Install Dependencies
-`ash
+```bash
 npm install
-`
+```
 
 ### 2. Set Up Environment Variables (Optional)
-You can create a .env.local file in the root directory to auto-fill your default API key:
-`env
+You can create a `.env.local` file in the root directory to auto-fill your default API key:
+```env
 GEMINI_API_KEY=your_gemini_api_key_here
-`
+```
 *Note: Keys entered in the Web UI have higher priority and are stored in LocalStorage.*
 
 ### 3. Run Development Server
-`ash
+```bash
 npm run dev
-`
-Open the local URL (default: http://localhost:3000) shown in your terminal.
+```
+Open the local URL (default: `http://localhost:3000`) shown in your terminal.
 
 ---
 
