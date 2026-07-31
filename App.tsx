@@ -4,7 +4,7 @@ import JSZip from 'jszip';
 import { 
   FileCheck, Loader2, Download, AlertTriangle, 
   RefreshCw, Trash2, Save, Info, Plus, X, Eye, Ban, FileCode,
-  CheckCircle2, Eraser, Pause, Sparkles
+  CheckCircle2, Eraser, Pause, Sparkles, Tag, Search
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import FileUpload from './components/FileUpload';
@@ -15,7 +15,7 @@ import { AiService } from './services/geminiService';
 import { PersistenceService } from './services/persistenceService';
 import { AppStatus, AppConfig, Chapter, ProcessingLog, SessionState } from './types';
 import { RECOMMENDED_TRANSLATION_PROMPT, TWO_STEP_BASE_PROMPT } from './prompts';
-import { parseGlossaryStr, glossaryToOutputStr } from './utils/glossaryUtils';
+import { parseGlossaryStr, glossaryToOutputStr, parseGlossaryValue } from './utils/glossaryUtils';
 
 const DEFAULT_CONFIG: AppConfig = {
   apiKey: '',
@@ -141,6 +141,8 @@ const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<'logs' | 'chapters' | 'glossary'>('logs');
   const [liveGlossary, setLiveGlossary] = useState<string>('');
   const [glossaryMap, setGlossaryMap] = useState<Record<string, string>>({});
+  const [glossarySearch, setGlossarySearch] = useState('');
+  const [newAliasInputs, setNewAliasInputs] = useState<Record<string, string>>({});
   const [isBulkEdit, setIsBulkEdit] = useState(false);
   const [previewChapter, setPreviewChapter] = useState<Chapter | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]); // Added state for chapters to trigger re-renders
@@ -163,6 +165,7 @@ const App: React.FC = () => {
   const cssFilesRef = useRef<string[] | undefined>(undefined);
   const activeChapterIndexRef = useRef<number>(-1);
   const activeChunkIndexRef = useRef<number>(0);
+  const unreviewedTermsRef = useRef<Record<string, string>>({});
 
   const isWorking = [AppStatus.PARSING, AppStatus.TRANSLATING, AppStatus.PACKAGING].includes(status);
 
@@ -328,6 +331,56 @@ const App: React.FC = () => {
         setIsCleaningGlossary(false);
         isCleaningGlossaryRef.current = false;
     }
+  };
+
+  const triggerIncrementalCleanup = async () => {
+      if (isCleaningGlossaryRef.current) return;
+      
+      const candidateMap = { ...unreviewedTermsRef.current };
+      unreviewedTermsRef.current = {}; // 立即重置计数，防止并发重复触发
+      
+      setIsCleaningGlossary(true);
+      isCleaningGlossaryRef.current = true;
+      addLog(`[Agent] Incremental Cleanup: AI is reviewing 50 newly added terms...`, 'process');
+      
+      try {
+          const aiService = new AiService(config);
+          const currentMap = await persistenceService.current.loadGlossary();
+          const masterMap = { ...currentMap };
+          
+          // 把待审查的候选词从 master 中分离出来
+          Object.keys(candidateMap).forEach(k => delete masterMap[k]);
+          
+          const masterText = glossaryToOutputStr(masterMap);
+          const candidatesText = glossaryToOutputStr(candidateMap);
+          
+          const cleanedText = await aiService.optimizeIncrementalGlossary(candidatesText, masterText);
+          const cleanedMap = parseGlossaryStr(cleanedText);
+          
+          // 重新读取数据库最新状态，防止并发写入导致数据丢失 (Race Condition Safety)
+          const latestMap = await persistenceService.current.loadGlossary();
+          let rejectedCount = 0;
+          Object.keys(candidateMap).forEach(k => {
+              // 如果新候选词被 AI 剔除了，从数据库中抹去
+              if (!cleanedMap[k]) {
+                  delete latestMap[k];
+                  rejectedCount++;
+              }
+          });
+          
+          await persistenceService.current.replaceGlossary(latestMap);
+          
+          setGlossaryMap(latestMap);
+          setLiveGlossary(glossaryToOutputStr(latestMap));
+          
+          addLog(`[Agent] Incremental Cleanup finished. Rejected ${rejectedCount} garbage terms.`, 'success');
+      } catch (error) {
+          console.error("Incremental cleanup failed:", error);
+          addLog(`[Agent] Incremental Cleanup failed. Kept all new terms.`, 'error');
+      } finally {
+          setIsCleaningGlossary(false);
+          isCleaningGlossaryRef.current = false;
+      }
   };
 
   // Auto scroll logs
@@ -566,12 +619,19 @@ const App: React.FC = () => {
                           } else {
                               const addedCount = await persistenceService.current.saveGlossaryTerms(deltaTerms);
                               if (addedCount > 0) {
-                                  // Reload full glossary to ensure UI and next chunks stay in sync
+                                  // 收集待审查新词
+                                  Object.assign(unreviewedTermsRef.current, deltaTerms);
+
                                   const masterGlossary = await persistenceService.current.loadGlossary();
                                   setGlossaryMap(masterGlossary);
                                   const fullStr = glossaryToOutputStr(masterGlossary);
                                   setLiveGlossary(fullStr);
                                   currentGlossary = fullStr;
+
+                                  // 检查是否达到 50 条阈值，异步触发增量清理
+                                  if (Object.keys(unreviewedTermsRef.current).length >= 50) {
+                                      triggerIncrementalCleanup();
+                                  }
                               }
                           }
                       }
@@ -603,6 +663,8 @@ const App: React.FC = () => {
                   await persistenceService.current.updateChapter(chapter);
                   await saveSessionState(AppStatus.TRANSLATING);
               }
+
+              return currentGlossary;
           },
           chapter.translatedChunks,
           forceTranslateIndices,
@@ -610,10 +672,7 @@ const App: React.FC = () => {
           chapters.slice(index + 1).map(c => c.markdown).join('\n')
         );
         chapter.translatedMarkdown = result.content;
-        // Filter the cumulative glossary to only show terms actually present in this chapter
-        const fullMap = parseGlossaryStr(result.glossary);
-        const filteredMap = aiService.filterGlossaryByInclusion(fullMap, chapter.markdown, 1);
-        chapter.glossary = glossaryToOutputStr(filteredMap);
+        chapter.glossary = result.glossary;
         
         currentGlossary = result.glossary;
         
@@ -775,6 +834,10 @@ const App: React.FC = () => {
      const newKey = `new_term_${Object.keys(glossaryMap).length}`;
      handleUpdateTerm(newKey, "", "");
   }
+
+  const handleUpdateTermTarget = (oldKey: string, key: string, newTarget: string) => {
+    handleUpdateTerm(oldKey, key, newTarget);
+  };
 
   const handleSaveGlossaryMap = async () => {
     await persistenceService.current.replaceGlossary(glossaryMap);
@@ -1629,66 +1692,100 @@ const App: React.FC = () => {
                                 className="w-full h-full p-6 font-mono text-sm text-neutral-300 outline-none transition-colors resize-none bg-transparent custom-scrollbar disabled:opacity-50"
                             />
                         ) : (
-                            <div className="flex-1 overflow-x-hidden overflow-y-auto custom-scrollbar p-2">
-                                <table className="w-full text-left border-collapse">
-                                    <thead>
-                                        <tr className="border-b border-white/10">
-                                            <th className="p-3 text-[10px] uppercase tracking-widest text-neutral-500 font-mono font-bold">Source</th>
-                                            <th className="p-3 text-[10px] uppercase tracking-widest text-neutral-500 font-mono font-bold">Translation</th>
-                                            <th className="p-3 w-10"></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-white/10">
-                                        {Object.entries(glossaryMap).sort().map(([key, value], idx) => (
-                                            <tr key={idx} className="group/row hover:bg-neutral-900 transition-colors">
-                                                <td className="p-1">
-                                                    <input 
-                                                        type="text" 
-                                                        value={key}
-                                                        onChange={(e) => handleUpdateTerm(key, e.target.value, value as string)}
-                                                        disabled={isWorking}
-                                                        className="w-full bg-transparent p-2 text-white outline-none focus:bg-neutral-800 rounded-none transition-colors font-mono text-sm disabled:opacity-50"
-                                                    />
-                                                </td>
-                                                <td className="p-1">
-                                                    <input 
-                                                        type="text" 
-                                                        value={value}
-                                                        onChange={(e) => handleUpdateTerm(key, key, e.target.value)}
-                                                        disabled={isWorking}
-                                                        className="w-full bg-transparent p-2 text-neutral-400 focus:text-white outline-none focus:bg-neutral-800 rounded-none transition-colors font-mono text-sm disabled:opacity-50"
-                                                    />
-                                                </td>
-                                                <td className="p-1">
-                                                    <button 
-                                                        onClick={() => handleDeleteTerm(key)}
-                                                        disabled={isWorking}
-                                                        className="p-1.5 text-neutral-500 hover:text-white transition-colors rounded-none hover:bg-neutral-800 opacity-0 group-hover/row:opacity-100 border border-transparent hover:border-white/20 disabled:opacity-0"
-                                                    >
-                                                        <X className="w-3.5 h-3.5" />
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                        {Object.keys(glossaryMap).length === 0 && (
-                                            <tr>
-                                                <td colSpan={3} className="p-8 text-center text-neutral-600 italic font-mono text-sm">
-                                                    No terms extracted yet...
-                                                </td>
-                                            </tr>
-                                        )}
-                                    </tbody>
-                                </table>
-                                <div className="p-3 border-t border-white/10 mt-1">
-                                    <button 
-                                        onClick={handleAddTerm}
-                                        disabled={isWorking}
-                                        className="flex items-center gap-2 text-[10px] font-mono text-neutral-500 hover:text-white transition-colors uppercase tracking-widest py-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        <Plus className="w-3 h-3" /> Add Term
-                                    </button>
+                                <div className="flex-1 overflow-hidden flex flex-col">
+                                    {/* Stats & Search Bar */}
+                                    <div className="p-3 border-b border-white/10 bg-neutral-950 flex flex-wrap items-center justify-between gap-3">
+                                        <div className="flex items-center gap-2 text-[10px] font-mono text-neutral-400 uppercase tracking-widest">
+                                            <Tag className="w-3 h-3 text-neutral-500" />
+                                            <span>{Object.keys(glossaryMap).length} TERMS</span>
+                                        </div>
+                                        <div className="relative flex-1 max-w-xs">
+                                            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500" />
+                                            <input 
+                                                type="text" 
+                                                placeholder="Search source, target or alias..." 
+                                                value={glossarySearch}
+                                                onChange={(e) => setGlossarySearch(e.target.value)}
+                                                className="w-full bg-neutral-900 border border-white/10 hover:border-white/30 focus:border-white/60 pl-8 pr-3 py-1 text-xs text-white outline-none font-mono transition-colors"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Table View */}
+                                    <div className="flex-1 overflow-x-auto overflow-y-auto custom-scrollbar p-2">
+                                        <table className="w-full text-left border-collapse min-w-[640px]">
+                                            <thead>
+                                                <tr className="border-b border-white/10">
+                                                    <th className="p-3 text-[10px] uppercase tracking-widest text-neutral-500 font-mono font-bold w-1/2">Source (Key)</th>
+                                                    <th className="p-3 text-[10px] uppercase tracking-widest text-neutral-500 font-mono font-bold w-1/2">Target (Translation)</th>
+                                                    <th className="p-3 w-10"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-white/10">
+                                                {Object.entries(glossaryMap)
+                                                    .filter(([key, value]) => {
+                                                        if (!glossarySearch.trim()) return true;
+                                                        const q = glossarySearch.toLowerCase();
+                                                        const parsed = parseGlossaryValue(value);
+                                                        return key.toLowerCase().includes(q) || 
+                                                               parsed.toLowerCase().includes(q);
+                                                    })
+                                                    .sort(([a], [b]) => a.localeCompare(b))
+                                                    .map(([key, value], idx) => {
+                                                        const parsed = parseGlossaryValue(value);
+                                                        return (
+                                                            <tr key={idx} className="group/row hover:bg-neutral-900/60 transition-colors align-top">
+                                                                <td className="p-1.5">
+                                                                    <input 
+                                                                        type="text" 
+                                                                        value={key}
+                                                                        onChange={(e) => handleUpdateTerm(key, e.target.value, value as string)}
+                                                                        disabled={isWorking}
+                                                                        className="w-full bg-transparent p-1.5 text-white outline-none focus:bg-neutral-800 rounded-none transition-colors font-mono text-sm font-semibold disabled:opacity-50"
+                                                                    />
+                                                                </td>
+                                                                <td className="p-1.5">
+                                                                    <input 
+                                                                        type="text" 
+                                                                        value={parsed}
+                                                                        onChange={(e) => handleUpdateTermTarget(key, key, e.target.value)}
+                                                                        disabled={isWorking}
+                                                                        className="w-full bg-transparent p-1.5 text-neutral-200 focus:text-white outline-none focus:bg-neutral-800 rounded-none transition-colors font-mono text-sm disabled:opacity-50"
+                                                                    />
+                                                                </td>
+                                                                <td className="p-1.5 text-right">
+                                                                    <button 
+                                                                        onClick={() => handleDeleteTerm(key)}
+                                                                        disabled={isWorking}
+                                                                        className="p-1.5 text-neutral-500 hover:text-red-400 transition-colors rounded-none hover:bg-neutral-800 opacity-0 group-hover/row:opacity-100 border border-transparent hover:border-white/20 disabled:opacity-0"
+                                                                        title="Delete term"
+                                                                    >
+                                                                        <X className="w-3.5 h-3.5" />
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                {Object.keys(glossaryMap).length === 0 && (
+                                                    <tr>
+                                                        <td colSpan={4} className="p-8 text-center text-neutral-600 italic font-mono text-sm">
+                                                            No terms extracted yet...
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                        <div className="p-3 border-t border-white/10 mt-1">
+                                            <button 
+                                                onClick={handleAddTerm}
+                                                disabled={isWorking}
+                                                className="flex items-center gap-2 text-[10px] font-mono text-neutral-500 hover:text-white transition-colors uppercase tracking-widest py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                <Plus className="w-3 h-3" /> Add Term
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
                         )}
                     </div>
                     <div className="mt-4 p-4 rounded-none bg-neutral-900 border border-white/10 flex items-start gap-3">

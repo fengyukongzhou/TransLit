@@ -35,9 +35,10 @@
 - 🤖 **智能双 Pass 翻译与校对**
   - **分包处理**：自动按约 3000 字（大小可灵活调节）进行智能拆包。
   - **双 Pass 润色**：除常规单 Pass 翻译外，支持开启 “Proofreading (校对与润色)” 双阶段流式处理。结合您输入的额外翻译上下文，产出信达雅的中文译文。
-- 🗂️ **智能术语库与自动清理 (Smart Glossary Cleanup)**
-  - 自动抽取、记录章节中的生僻词与专有名词。
-  - 支持按需翻译，同时结合上下文对未来文本进行词频和重要度匹配，动态过滤冗余术语，保证术语库的紧凑与精准。
+- 🗂️ **智能术语库与强一致性 (Smart Glossary & Strict Consistency)**
+  - 自动抽取、记录章节中的生僻词与虚构专有实体。
+  - **强一致性铁律**：从系统底层施加了最严苛的一致性对齐指令，彻底解决大模型在长文翻译中的“人名/术语漂移”问题。
+  - 支持结合后文语境自动清理、动态过滤只出现一次的“跑龙套”术语，保证术语库的极致紧凑。
 
 ## 📖 电子书脚注预处理 (AI Agent 工作流)
 
@@ -120,8 +121,9 @@ For the author's thoughts on TransLit's development and the evolution of AI tran
 - 🤖 **Smart Two-Pass Translation & Proofreading**
   - **Chunk Splitter**: Automatically splits chapters into chunks of ~3000 words.
   - **Two-Pass Polish**: Supports an optional "Proofreading" stage following the initial translation pass. Combines user-specified context to deliver natural, polished Chinese translations.
-- 🗂️ **Glossary Management & Smart Cleanup**
-  - Automatically extracts and logs rare words and proper nouns during translation.
+- 🗂️ **Smart Glossary & Strict Consistency**
+  - Automatically extracts and logs rare words and fictional proper nouns during translation.
+  - **Strict Alignment Rule**: Applies strict consistency rules at the system prompt level to completely eliminate the "term drift" issue (e.g., inconsistent character names) commonly seen in LLM long-context translation.
   - Evaluates terms against future text, dynamically filtering out redundant glossary records to keep the database clean and efficient.
 
 ## 📖 EPUB Footnote Preprocessing (AI Agent Workflow)

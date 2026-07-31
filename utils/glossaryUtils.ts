@@ -6,7 +6,7 @@ export const parseGlossaryStr = (str: string): Record<string, string> => {
     const structuralMatch = line.match(/SOURCE:\s*(.*?)\s*\|\s*TARGET:\s*(.*)/i);
     if (structuralMatch) {
         const key = structuralMatch[1].trim();
-        const value = structuralMatch[2].trim();
+        const value = parseGlossaryValue(structuralMatch[2]);
         if (key && value) {
             result[key] = value;
             return;
@@ -32,3 +32,7 @@ export const glossaryToOutputStr = (glossary: Record<string, string>): string =>
     .map(([k, v]) => `SOURCE: ${k} | TARGET: ${v}`)
     .join('\n');
 }
+
+export const parseGlossaryValue = (rawValue: string): string => {
+  return rawValue ? rawValue.trim() : "";
+};
