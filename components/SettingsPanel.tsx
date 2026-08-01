@@ -324,7 +324,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, setConfig, disabl
                         <label className="flex items-center gap-2 text-xs font-bold text-black uppercase tracking-widest font-mono">
                            <BookA className="w-3.5 h-3.5 text-black"/> Book Meta Info & Translation Notes
                         </label>
-                        <p className="text-[10px] text-neutral-500 italic pb-1 font-mono">
+                        <p className="text-[10px] text-neutral-500 pb-1 font-mono">
                           Provide context like author, genre, style (e.g. "Hard-boiled"), or specific character names/title translations. This info is added to all translation modes.
                         </p>
                         <textarea

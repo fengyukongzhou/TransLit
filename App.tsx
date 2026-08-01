@@ -91,13 +91,13 @@ const MarkdownImage: React.FC<{ src?: string, alt?: string, chapterPath: string,
     }, [src, chapterPath]);
 
     if (!src) return null;
-    if (isLoading) return <span className="w-full h-32 bg-stone-100 animate-pulse rounded-lg flex items-center justify-center text-stone-400 text-xs font-serif italic">Loading image...</span>;
+    if (isLoading) return <span className="w-full h-32 bg-neutral-200 animate-pulse rounded-none flex items-center justify-center text-neutral-500 text-xs font-mono uppercase tracking-widest">Loading image...</span>;
     
     return (
         <img 
             src={blobUrl || src} 
             alt={alt} 
-            className="rounded-lg shadow-sm mx-auto my-6 max-h-[500px] object-contain bg-stone-50"
+            className="rounded-none shadow-sm mx-auto my-6 max-h-[500px] object-contain bg-neutral-50"
             onError={(e) => {
                 // If blob fails, it might be a real external URL or missing
                 (e.target as HTMLImageElement).className = "hidden";
@@ -1330,8 +1330,8 @@ const App: React.FC = () => {
                             Your progress has been saved. Click "{getActionText()}" to continue from the last saved chapter.
                         </span>
                         {isMissingZip && (
-                            <div className="mt-4 border border-red-500 bg-red-50 p-4 w-full">
-                                <span className="block font-bold text-red-700 text-xs mb-2">ORIGINAL EPUB MISSING</span>
+                            <div className="mt-4 border border-red-500/60 bg-neutral-950 p-4 w-full">
+                                <span className="block font-bold text-red-400 text-xs mb-2">ORIGINAL EPUB MISSING</span>
                                 <span className="block text-red-600 text-[10px] mb-3 leading-relaxed">
                                     We need the original EPUB file to package your translation because the local cache was cleared or exceeded limits. Please provide the original EPUB below to continue packaging.
                                 </span>
@@ -1434,7 +1434,7 @@ const App: React.FC = () => {
                     <div className="flex-1 relative">
                         <div className="absolute inset-0 flex flex-col items-center justify-center">
                             <LogoWatermark />
-                            <p className="text-neutral-600 italic text-sm font-serif mt-4">Awaiting manuscript...</p>
+                            <p className="text-neutral-600 text-xs font-mono uppercase tracking-widest mt-4">Awaiting manuscript...</p>
                         </div>
                     </div>
                 ) : (
@@ -1457,7 +1457,7 @@ const App: React.FC = () => {
                     <div className="flex-1 relative">
                         <div className="absolute inset-0 flex flex-col items-center justify-center">
                             <LogoWatermark />
-                            <p className="text-neutral-600 italic text-sm font-mono mt-4">No chapters extracted yet.</p>
+                            <p className="text-neutral-600 text-xs font-mono uppercase tracking-widest mt-4">No chapters extracted yet.</p>
                         </div>
                     </div>
                 ) : (
@@ -1626,12 +1626,12 @@ const App: React.FC = () => {
                                 </div>
 
                                 {config.enableGlossary && chapter.glossary && (
-                                    <div className="mt-3 pt-3 border-t border-stone-800/50">
+                                    <div className="mt-3 pt-3 border-t border-neutral-800/50">
                                         <details className="cursor-pointer">
-                                            <summary className="text-[10px] font-mono text-stone-500 hover:text-stone-300 uppercase tracking-widest transition-colors focus:outline-none">
+                                            <summary className="text-[10px] font-mono text-neutral-500 hover:text-neutral-300 uppercase tracking-widest transition-colors focus:outline-none">
                                                 View Glossary
                                             </summary>
-                                            <div className="mt-2 text-[11px] font-mono text-stone-400 bg-stone-950/50 p-2 rounded border border-stone-800/50 whitespace-pre-wrap leading-relaxed">
+                                            <div className="mt-2 text-[11px] font-mono text-neutral-400 bg-neutral-950/50 p-2 rounded border border-neutral-800/50 whitespace-pre-wrap leading-relaxed">
                                                 {chapter.glossary}
                                             </div>
                                         </details>
@@ -1768,7 +1768,7 @@ const App: React.FC = () => {
                                                     })}
                                                 {Object.keys(glossaryMap).length === 0 && (
                                                     <tr>
-                                                        <td colSpan={4} className="p-8 text-center text-neutral-600 italic font-mono text-sm">
+                                                        <td colSpan={4} className="p-8 text-center text-neutral-600 font-mono text-sm">
                                                             No terms extracted yet...
                                                         </td>
                                                     </tr>
